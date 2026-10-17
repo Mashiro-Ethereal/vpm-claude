@@ -1,0 +1,11 @@
+references/notes/_sources/
+*.pdf
+outputs/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+wandb/
+*.egg-info/
+.venv/
+.DS_Store
+*.tar.gz
