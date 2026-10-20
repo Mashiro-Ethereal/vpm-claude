@@ -1,0 +1,25 @@
+task: Move a block to the region and release it
+objects:
+  g: {name: gripper}
+  block: {name: block}
+  region: {name: target region}
+stages:
+  - name: reach
+    exit: ["gripper_open(g)", "near(g, block)"]
+  - name: grasp
+    exit: ["grasped(g, block)"]
+  - name: carry
+    exit: ["in_region(block, region)"]
+    invariants:
+      - literal: grasped(g, block)
+        regress_to: grasp
+        event: "Regrasp {block} with {g}."
+  - name: release
+    exit: ["in_region(block, region)", "not grasped(g, block)"]
+official:
+  - literals: ["in_region(block, region)", "not grasped(g, block)"]
+    key: success
+params:
+  - {name: near.max_dist, default: 0.1, range: [0.02, 0.3]}
+  - {name: progress.carry.span, default: 0.5, range: [0.1, 1.0]}
+runtime: {debounce: 2}
