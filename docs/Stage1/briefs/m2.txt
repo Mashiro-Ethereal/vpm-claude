@@ -1,0 +1,74 @@
+<task>
+Implement milestone M2 of the package `vpmkit` in /home/zxh/projects_dir/vpm-claude (git branch `stage1-impl`): the ManiSkill adapter. M1 already exists (read vpmkit/world.py, vpmkit/runtime/teacher.py, vpmkit/artifact/loader.py and vpmkit/resources/candidate_api.md first; reuse their types, do not redesign them). The adapter turns a live ManiSkill environment into the tensor `WorldState` that candidate predicates read, implements the `BindingAPI` used by a candidate's `bindings.py`, and provides milestone readings and a scene inventory.
+
+Environment (fixed):
+- Python: /home/zxh/anaconda3/envs/vpm-mani/bin/python (torch 2.12 + CUDA, mani_skill 3.0.1, sapien 3.0.3, gymnasium 1.2). mani_skill is an editable install from /home/zxh/projects_dir/ManiSkill: you may READ its source to learn APIs, but never modify it or anything else outside the repo. No pip/conda installs, no network.
+- GPU: use only `CUDA_VISIBLE_DEVICES=0` for every command that starts ManiSkill.
+- Before mani_skill is imported, the adapter module must set `os.environ.setdefault("MS_ASSET_DIR", "<repo>/outputs/ms_assets")` so nothing is written to the home directory.
+- pytest is not installed: tests use `unittest`.
+
+Create:
+  vpmkit/adapters/__init__.py
+  vpmkit/adapters/maniskill.py
+  vpmkit/adapters/inventory.py
+  tests/integration/__init__.py
+  tests/integration/test_maniskill_adapter.py
+You may make small, necessary fixes to M1 files if an M1 API is unusable for the adapter; list every such change in your report. Leave docs/, VPM_idea.md, README.md, references/ untouched.
+</task>
+
+<spec>
+1. `make_env(env_id, num_envs=1, seed=None, **kwargs)`: `gymnasium.make(env_id, num_envs=num_envs, obs_mode="state", render_mode=None, sim_backend=("physx_cuda" if num_envs > 1 else "physx_cpu"), **kwargs)` (look up the exact backend names in mani_skill and adjust), returns the env; callers use `env.unwrapped` for internals.
+
+2. `ManiSkillBindingAPI(env)` implements vpmkit.world.BindingAPI for the unwrapped env:
+   - `gripper()` -> ObjSpec(kind="gripper", source=env.agent)
+   - `actor(actor, half_size, attrs=None)` -> ObjSpec(kind="actor"); half_size may be a float, a length-3 sequence, a tensor [3] or [N,3], or a zero-arg callable returning one of these.
+   - `site(source, attrs=None)` -> ObjSpec(kind="site"); source is an Actor (e.g. a visual-only goal marker) or a zero-arg callable returning a ManiSkill Pose; half_size is zero.
+   - `table()` -> ObjSpec(kind="table").
+   attrs values are tensors/floats or zero-arg callables re-evaluated at every snapshot (needed for per-episode randomised quantities); results are broadcast/validated to leading dim N.
+
+3. `ManiSkillAdapter(env, bind_fn)`:
+   - calls `bind_fn(env.unwrapped, ManiSkillBindingAPI(env.unwrapped))` once, validates the returned dict (handle -> ObjSpec), and raises AdapterError with a clear message for unknown kinds or bad shapes;
+   - `snapshot() -> WorldState` built from the CURRENT simulator state, all tensors on env.unwrapped.device, float32:
+     * actor: pos/quat from `actor.pose.p` / `actor.pose.q` (wxyz), linvel/angvel from the actor (zeros if the body is kinematic or static and velocities are unavailable), half_size [N,3], attrs evaluated;
+     * site: pose as above, zero velocities, zero half_size;
+     * gripper: pos/quat of the TCP link (`agent.tcp.pose`), TCP link velocities, zero half_size, attrs: "width" = sum of the two finger joint positions (Panda: the last two entries of `agent.robot.get_qpos()`), "arm_qvel" = all other joint velocities;
+     * table: pos (0, 0, -0.01), identity quat, half_size (1.0, 1.0, 0.01) so the top is at z = 0 (table top height in these tasks is z = 0), zero velocities;
+     * grasping[(gripper_handle, actor_handle)] = `agent.is_grasping(actor)` with ManiSkill defaults, for every actor handle;
+     * contacts[(a, b)] = norm of `scene.get_pairwise_contact_forces(actor_a, actor_b)` for every unordered pair of actor handles;
+     * official = every entry of `env.unwrapped.evaluate()` converted to a tensor with leading dim N (keep bools as bool, floats as float32);
+     * meta = {"env_id": ..., "num_envs": N}.
+   - The snapshot must pass `WorldState.validate()`.
+
+4. Milestones (independent of any candidate): `MilestoneTracker(env)` with `reset(env_idx=None)` (records each dynamic actor's z at reset) and `read() -> dict[str, BoolTensor[N]]` returning every boolean `evaluate()` entry under "official:<key>", plus for every dynamic actor in `env.unwrapped.scene.actors` (exclude the table, the ground and robot links; find the body-type attribute in mani_skill's Actor struct) "grasped:<actor name>" = `agent.is_grasping(actor)` and "lifted:<actor name>" = (z - z_at_reset > 0.02).
+
+5. vpmkit/adapters/inventory.py: `scene_inventory(env_id, seeds=(0,1,2,3,4)) -> dict` (JSON-serialisable): for each actor in `scene.actors`: name, body type, position min/max over the seeds after reset, yaw range; the `evaluate()` keys with dtype and shape; the agent's uid and control mode; and numeric attributes of the unwrapped env instance (python floats/ints and small tensors with <= 16 elements, e.g. goal_thresh, cube_half_size, peg_half_sizes shape) — skip private attributes and anything that is not plain numeric data. Also `inventory_markdown(inv) -> str`.
+
+6. `random_rollout(env, adapter, steps, seed) -> list[WorldState]`: reset with the seed, take uniform random actions from the action space, snapshot after reset and after every step.
+
+7. Integration tests (tests/integration/test_maniskill_adapter.py), skipped unless the environment variable VPM_RUN_MANISKILL=1 is set. For each of PushCube-v1, PickCube-v1, LiftPegUpright-v1, StackCube-v1, PegInsertionSide-v1, StackPyramid-v1:
+   - build the env with num_envs=4, bind with an ad-hoc binding written in the test (gripper + the task's actors with plausible half sizes; for PegInsertionSide also attrs "head_offset" = callable returning `peg_head_offsets.p` and "hole_offset"/"hole_radius" from `box_hole_offsets.p` / `box_hole_radii`; for PickCube and PushCube the goal marker as a site);
+   - snapshot after reset and after 5 random steps: shapes, finite values, official keys equal to evaluate() keys, grasping/contacts keys present, gripper width within [0, 0.09];
+   - MilestoneTracker returns the expected keys;
+   - scene_inventory returns all actors and is json.dumps-able;
+   - a geometry check: `vpmkit.geometry.quat_to_euler_xyz(q)` equals mani_skill's `rotation_conversions.matrix_to_euler_angles(rotation_conversions.quaternion_to_matrix(q), "XYZ")` on random quaternions and on the LiftPegUpright peg pose (atol 1e-5).
+   Keep the integration test fast (well under 5 minutes in total).
+</spec>
+
+<verification_loop>
+From the repo root:
+  /home/zxh/anaconda3/envs/vpm-mani/bin/python -m unittest discover -s tests -t . -v
+  CUDA_VISIBLE_DEVICES=0 VPM_RUN_MANISKILL=1 /home/zxh/anaconda3/envs/vpm-mani/bin/python -m unittest tests.integration.test_maniskill_adapter -v
+Both must pass. Confirm `git status` shows only intended changes (new adapter/test files, plus any listed M1 fixes), and that nothing was written outside the repo except caches the libraries create under /tmp.
+</verification_loop>
+
+<action_safety>
+Scope: the files listed. Do NOT run git add or git commit. Do not install packages, do not use the network, do not modify /home/zxh/projects_dir/ManiSkill or the conda environment, do not write outside the repo (outputs/ is the place for any generated data). Use only GPU 0.
+</action_safety>
+
+<structured_output_contract>
+End with a report:
+  1. What you built, and every ManiSkill API you relied on (with file:line in the ManiSkill source)
+  2. Files created or changed (mark M1 fixes explicitly, with the reason)
+  3. Gate outcomes: both unittest summary lines
+  4. Surprises about the environments (e.g. kinematic actors without velocities, evaluate() entries that are not bool) and open questions
+</structured_output_contract>

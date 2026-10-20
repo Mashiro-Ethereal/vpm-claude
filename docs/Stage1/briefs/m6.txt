@@ -1,0 +1,49 @@
+<task>
+Implement milestone M6 of `vpmkit` in /home/zxh/projects_dir/vpm-claude (branch `stage1-impl`): the rollout-based semantic checks of the process teacher. They are computed in Stage1 code but their data (saved rollouts containing failures) only comes in Stage2, so this milestone delivers the computations, a report, and tests on synthetic and random-policy data. Read vpmkit/runtime/teacher.py and vpmkit/validate/replay.py (Trajectory, record_rollout, replay_summary) first and reuse them.
+
+Environment (fixed): Python /home/zxh/anaconda3/envs/vpm-mani/bin/python (torch+CUDA, mani_skill 3.0.1 editable from /home/zxh/projects_dir/ManiSkill — read-only). scikit-learn may be absent: implement any regression with torch. No installs, no network, GPU 0 only. Tests use unittest.
+
+Create:
+  vpmkit/validate/semantic.py
+  tests/test_semantic_unit.py
+  tests/integration/test_semantic_maniskill.py   (VPM_RUN_MANISKILL=1)
+and add a `semantic` subcommand to vpmkit/__main__.py (`python -m vpmkit semantic --env ID --candidate DIR --trajectories FILE [--json out.json]`). Leave docs/, VPM_idea.md, README.md, references/ untouched.
+</task>
+
+<spec>
+All functions take a Teacher and a list of Trajectory (states stacked along N as T frames, success flag) and return JSON-serialisable dicts. Each trajectory is processed with Teacher.run_sequence (one evaluation per frame, reused).
+
+1. `guard_necessity(teacher, trajs, horizon=None)`: for each stage k and each literal l of its exit guard: among frames where the teacher is in stage k and every OTHER literal of the guard holds, split by whether l holds. Report the eventual-success rate of the trajectory (success flag) and, when available, the rate of reaching stage k+1 within `horizon` frames (None = until the end), for both groups, with counts. A literal whose absence barely changes the outcome (difference below a reported threshold, default 0.05, with at least 20 frames per group) is flagged "possibly unnecessary". Groups with too few frames are reported as "insufficient data".
+2. `guard_sufficiency(teacher, trajs, window=20)`: for each transition out of stage k (k -> k+1 or beyond), the fraction followed by a regression (an invariant-triggered event) within `window` frames, and the fraction of those trajectories that end in failure; flag stages with regression rate above 0.3 (with at least 10 transitions) as "possibly insufficient guard".
+3. `predictiveness(teacher, trajs, horizon=20)`: label each frame 1 if the trajectory fails or stalls (no stage increase) within the next `horizon` frames, else 0; fit two L2-regularised logistic regressions with torch (features: [phi] versus [phi, predicate truth values, clipped margins]) with a fixed seed and a trajectory-level train/test split (70/30); report test AUC (compute AUC directly from ranks) and log loss for both, and the difference. Fewer than 2 trajectories or a single class -> "insufficient data".
+4. `flicker(teacher, trajs)`: per predicate instance, toggles per 100 frames, and the fraction of toggles that happen while |margin| is within 10% of the predicate's scale (near-threshold flicker); per stage, count of advance-regress-advance cycles within 5 frames.
+5. `state_determines_stage(teacher, trajs)`: group frames by their full predicate truth vector; report the fraction of frames whose group contains more than one stage label, and the top groups with their stage distributions. (This is the "is the stage determined by the current state" check, approximated at the level of the predicate vector.)
+6. `semantic_report(teacher, trajs, **kw) -> dict` combining all of the above with the number of trajectories, success rate and frame count, plus `semantic_report_markdown(report)`.
+
+Tests:
+ - unit: synthetic trajectories for the toy fixture candidate (tests/fixtures/toy) constructed so that: one literal is clearly unnecessary (success regardless of it); one guard is insufficient (frequent regressions right after its transition); predicate values carry information beyond phi for a constructed failure pattern (AUC of the richer model clearly higher); a flickering literal near its threshold; two identical predicate vectors labelled with different stages. Check each function detects its case, and that insufficient data is reported instead of crashing on tiny inputs.
+ - integration (VPM_RUN_MANISKILL=1, CUDA_VISIBLE_DEVICES=0): record 6 random-policy rollouts of 40 steps on PickCube-v1 (num_envs=1) with candidates/reference/PickCube-v1 using record_rollout, save/load them with the replay helpers, run semantic_report and the CLI subcommand; assert the report is produced and JSON-serialisable (random rollouts mostly yield "insufficient data", which is fine).
+</spec>
+
+<simulator_constraints>
+Known limitation found in M2: SAPIEN 3.0.3 can crash natively when one process creates GPU-simulated scenes more than once (a second physx_cuda env, even after closing the first, or several tasks one after another). Any code path or test that may build more than one GPU env must give each one its own subprocess (follow `run_task` in tests/integration/test_maniskill_adapter.py). Single CPU envs (num_envs=1) may be created repeatedly. Run every command that may start the simulator with core dumps disabled and caches kept in the repo, i.e. prefix gate commands with `ulimit -c 0; export XDG_CACHE_HOME=/home/zxh/projects_dir/vpm-claude/outputs/cache PYTHONDONTWRITEBYTECODE=1;`, so that nothing is written to /var/crash or the home directory.
+</simulator_constraints>
+
+<verification_loop>
+From the repo root:
+  /home/zxh/anaconda3/envs/vpm-mani/bin/python -m unittest discover -s tests -t . -v
+  ulimit -c 0; export XDG_CACHE_HOME=/home/zxh/projects_dir/vpm-claude/outputs/cache PYTHONDONTWRITEBYTECODE=1; CUDA_VISIBLE_DEVICES=0 VPM_RUN_MANISKILL=1 /home/zxh/anaconda3/envs/vpm-mani/bin/python -m unittest tests.integration.test_semantic_maniskill -v
+Both must pass. Confirm `git status` shows only intended changes.
+</verification_loop>
+
+<action_safety>
+Scope: the files listed. Do NOT git add/commit. No installs, no network, no writes outside the repo, do not modify /home/zxh/projects_dir/ManiSkill or the conda env. GPU 0 only.
+</action_safety>
+
+<structured_output_contract>
+End with a report:
+  1. What you built and how each check is operationalised (one line each)
+  2. Files created or changed
+  3. Gate outcomes: both unittest summary lines
+  4. Open questions
+</structured_output_contract>

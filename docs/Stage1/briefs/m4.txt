@@ -1,0 +1,72 @@
+<task>
+Implement milestone M4 of `vpmkit` in /home/zxh/projects_dir/vpm-claude (branch `stage1-impl`): the generation harness that lets an LLM agent write a candidate for a ManiSkill task, validates it with the two-layer validator, feeds failures back for a bounded number of repair rounds, and records everything. M1 (core), M2 (adapter, inventory), M3a (validator) and M3b (reference candidates under candidates/reference/, example under vpmkit/resources/example_candidate/PushCube-v1/) exist. Read them first (especially vpmkit/validate/*, vpmkit/adapters/inventory.py, vpmkit/resources/candidate_api.md) and reuse their APIs.
+
+This run does NOT call any real LLM: the real backend is implemented and tested only through a fake `claude` executable. Never read or print API keys.
+
+Environment (fixed): Python /home/zxh/anaconda3/envs/vpm-mani/bin/python (torch+CUDA, mani_skill 3.0.1 editable from /home/zxh/projects_dir/ManiSkill — read-only). No installs, no network, GPU 0 only. Tests use unittest.
+
+Create:
+  vpmkit/harness/__init__.py
+  vpmkit/harness/bundle.py
+  vpmkit/harness/backends.py
+  vpmkit/harness/run.py
+  vpmkit/resources/REQUIREMENTS.md
+  vpmkit/resources/generation_prompt.md
+  vpmkit/__main__.py                 # CLI
+  configs/stage1.yaml
+  tests/test_harness_unit.py
+  tests/fixtures/fake_claude.py      # executable test double for the `claude` CLI
+  tests/integration/test_harness_maniskill.py   (VPM_RUN_MANISKILL=1)
+Leave docs/, VPM_idea.md, README.md, references/ untouched.
+</task>
+
+<spec>
+1. Input bundle (bundle.py): `build_bundle(env_id, out_dir) -> BundleInfo` writes:
+   - TASK.md: env id; the "Task Description", "Randomizations" and "Success Conditions" parts of the env class docstring; the list of evaluate() keys; what to produce (a candidate directory) and how to self-check it.
+   - env_source.py: the source of the env class (inspect.getsource) with every method whose name contains "reward" removed (use ast to drop them, then ast.unparse); add a header comment listing the removed methods. evaluate() and the helpers it uses stay.
+   - inventory.json and inventory.md from vpmkit.adapters.inventory.scene_inventory.
+   - candidate_api.md (copy of vpmkit/resources/candidate_api.md), REQUIREMENTS.md (copy of vpmkit/resources/REQUIREMENTS.md), example/ (copy of vpmkit/resources/example_candidate/PushCube-v1/), never any file from candidates/reference/.
+   - bundle.json: env_id, mani_skill version, files with sha256, and an overall `bundle_hash` (sha256 over sorted relative paths and contents; it must not depend on timestamps).
+   Refuse env_id "PushCube-v1" (it is the example task).
+2. vpmkit/resources/REQUIREMENTS.md (English, for the generating agent), covering: the candidate files; predicates only through parameters and the WorldView/ObjView API, no object names, no environment judgments; current state only; one-sentence descriptions that match the definitions exactly; English need_true/need_false templates; thresholds as keyword defaults with ranges declared in params; copying environment judgments: copy the evaluate() formula exactly into an object-parameterised predicate, declare it in the `official` block (a list of literals whose conjunction must equal one evaluate() key frame by frame), keep its thresholds out of params; the last stage's exit guard should correspond to `success` when success is a conjunction of conditions; linear stages, negation allowed, no disjunction; invariants with regress targets that can actually be re-satisfied (e.g. a lost grasp regresses to the grasp stage, not to a stage requiring an open gripper); progress with fixed scales only; no Python loops in predicates/progress; how to run the validator on the candidate (`python -m vpmkit validate ./candidate --env <env_id>` with the interpreter path given in TASK.md).
+3. vpmkit/resources/generation_prompt.md: the prompt template for the generating agent (placeholders {env_id}, {bundle_dir}, {candidate_dir}, {python}, {feedback}); round 0 asks to read the bundle and write the candidate; later rounds include the previous validator/review feedback and ask for a revised candidate in place.
+4. Backends (backends.py):
+   - `GenerationBackend` protocol: `generate(bundle_dir: Path, candidate_dir: Path, workdir: Path, feedback: str | None, round_idx: int) -> GenerationResult(transcript_path, model, usage, returncode, duration_s)`.
+   - `ScriptedBackend(source_dir, mutations: dict[int, callable] | None = None)`: copies source_dir into candidate_dir each round, then applies mutations[round_idx] (a function editing files in candidate_dir) if present. Used for tests and for exercising the pipeline without an LLM.
+   - `ClaudeCodeBackend(claude_bin="claude", model, small_model, base_url, api_key_env, max_turns=60, timeout_s=3600, python=...)`: runs `claude -p <prompt> --output-format stream-json --verbose --max-turns N --model <model> --allowedTools <list> --disallowedTools WebFetch,WebSearch` with cwd = workdir. Allowed tools: Read, Write, Edit, Glob, Grep and Bash restricted to running the validator command. Environment: a copy of os.environ without any ANTHROPIC_*/CLAUDE_* variables, plus ANTHROPIC_BASE_URL=base_url, ANTHROPIC_AUTH_TOKEN=<value of os.environ[api_key_env], read at call time and never logged>, ANTHROPIC_MODEL=model, ANTHROPIC_SMALL_FAST_MODEL=small_model, and CLAUDE_CONFIG_DIR=<workdir>/.claude_config so the user's own Claude configuration and instruction files are NOT loaded. Writes the raw stream to transcript.jsonl, parses the model name from the init event and usage/cost from the final result event; a missing key, a non-zero exit or a timeout yields a GenerationResult with returncode != 0 and an error note instead of raising.
+   - `ClaudeCodeReviewBackend` implementing vpmkit.validate.layer2.ReviewBackend the same way but with read-only tools (Read, Glob, Grep) and its own config dir; returns the final result text.
+5. Run loop (run.py): `run_generation(env_id, backend, *, review_backend=None, out_root="outputs/stage1/runs", run_id=None, max_rounds=3, validator=validate_layer1, validator_kwargs=None) -> RunRecord`.
+   - Directory: out_root/<env_id>/<run_id>/ with bundle/ (built once), work/ (agent workdir), candidate/ (current candidate), rounds/<i>/ (a frozen copy of the candidate, layer1.json, layer1.md, layer2.json when run, generation.json), run.json.
+   - Round i: backend.generate -> validator(candidate, env_id, **validator_kwargs) -> if layer 1 passed and review_backend is set: run_layer2 (task text and env source from the bundle) -> passed iff layer 1 passed and (no review or review verdict "pass"). Stop at the first passing round. Feedback for the next round = layer-1 Markdown + review issues. After max_rounds failing rounds: status "failed", human_intervention = True.
+   - RunRecord (JSON): run_id, env_id, bundle_hash, backend description (class, model; never secrets), per-round results (passed, layer-1 summary, review verdict, durations, usage), final status, total time, mani_skill and torch versions, git commit of the repo (git rev-parse HEAD, if available).
+   - `validator` is injectable so unit tests can stub it.
+6. CLI (`python -m vpmkit ...`): `validate <candidate_dir> --env ID [--num-envs N --steps T --seeds ...] [--json out.json]` (prints the Markdown report, exit code 0 if passed else 1); `bundle --env ID --out DIR`; `inventory --env ID`; `generate --env ID --backend scripted|claude [--source DIR] [--rounds 3] [--review] [--run-id ID] [--config configs/stage1.yaml]`.
+6b. Update vpmkit/resources/candidate_api.md (it is shown verbatim to the generating agent): in "Bindings", state that `env` is the unwrapped ManiSkill env, list what the ManiSkill adapter provides (grasping for every gripper/actor pair, contact forces for every actor pair, a table object with its top at z = 0, attrs callables re-evaluated every step) and show a realistic binding; replace the "Limitations" section so it no longer describes M1 only; add a short section on how to self-check with the validator CLI. Keep everything else accurate to the code.
+7. configs/stage1.yaml: python path, out_root, max_rounds 3, validator defaults (num_envs 8, seeds [0,1,2], steps 30), and a `deepseek` section with base_url "https://api.deepseek.com/anthropic", model "deepseek-v4-pro", small_model "deepseek-flash", api_key_env "DEEPSEEK_API_KEY", each marked in a YAML comment as "verify before the first real run".
+8. Tests:
+   - unit (no simulator): bundle build with a stubbed inventory (env_source without reward methods but with evaluate; no reference files; stable bundle_hash); run_generation with ScriptedBackend + a stub validator: pass in round 0; fail-then-pass via mutations; three failures -> human_intervention True; ClaudeCodeBackend against tests/fixtures/fake_claude.py (an executable that checks it received the expected flags and env vars — including that CLAUDE_CONFIG_DIR is set and that no inherited ANTHROPIC_ variable leaks — writes a given candidate directory into the candidate path, and prints init/result stream-json events) with a dummy API key set in the test environment; missing API key -> returncode != 0 without raising.
+   - integration (VPM_RUN_MANISKILL=1, CUDA_VISIBLE_DEVICES=0): build_bundle for PickCube-v1 and StackCube-v1; run_generation for PickCube-v1 with ScriptedBackend(candidates/reference/PickCube-v1) and the real validator with small settings (num_envs 4, seeds (0,), steps 15): passes in round 0; with a mutation that breaks at_goal in round 0 only: fails round 0, passes round 1; the CLI `validate` on the reference PickCube candidate exits 0.
+</spec>
+
+<simulator_constraints>
+Known limitation found in M2: SAPIEN 3.0.3 can crash natively when one process creates GPU-simulated scenes more than once (a second physx_cuda env, even after closing the first, or several tasks one after another). Any code path or test that may build more than one GPU env must give each one its own subprocess (follow `run_task` in tests/integration/test_maniskill_adapter.py). Single CPU envs (num_envs=1) may be created repeatedly. Run every command that may start the simulator with core dumps disabled and caches kept in the repo, i.e. prefix gate commands with `ulimit -c 0; export XDG_CACHE_HOME=/home/zxh/projects_dir/vpm-claude/outputs/cache PYTHONDONTWRITEBYTECODE=1;`, so that nothing is written to /var/crash or the home directory.
+</simulator_constraints>
+
+<verification_loop>
+From the repo root:
+  /home/zxh/anaconda3/envs/vpm-mani/bin/python -m unittest discover -s tests -t . -v
+  ulimit -c 0; export XDG_CACHE_HOME=/home/zxh/projects_dir/vpm-claude/outputs/cache PYTHONDONTWRITEBYTECODE=1; CUDA_VISIBLE_DEVICES=0 VPM_RUN_MANISKILL=1 /home/zxh/anaconda3/envs/vpm-mani/bin/python -m unittest tests.integration.test_harness_maniskill -v
+Both must pass. Confirm `git status` shows only intended changes; generated run directories go under outputs/ (git-ignored).
+</verification_loop>
+
+<action_safety>
+Scope: the files listed. Do NOT git add/commit. Never call a real LLM API, never read or print secrets. No installs, no network, no writes outside the repo, do not modify /home/zxh/projects_dir/ManiSkill or the conda env. GPU 0 only.
+</action_safety>
+
+<structured_output_contract>
+End with a report:
+  1. What you built and any interpretation of the spec
+  2. Files created or changed
+  3. Gate outcomes: both unittest summary lines
+  4. Anything about the `claude` CLI flags you could not verify (list the exact command line the backend builds)
+</structured_output_contract>

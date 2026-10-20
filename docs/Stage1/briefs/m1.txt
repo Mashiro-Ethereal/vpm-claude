@@ -1,0 +1,111 @@
+<task>
+Implement milestone M1 of a new Python package `vpmkit` in the repository /home/zxh/projects_dir/vpm-claude (git branch `stage1-impl`). The repo currently holds only docs; there is no code yet. M1 is the simulator-independent core of a "process teacher": candidates (one directory per task) describe a stage automaton with guard predicates; the runtime evaluates them on batched tensor "world states". Do NOT import mani_skill or sapien anywhere in M1 (a ManiSkill adapter comes later in M2).
+
+Environment (fixed, do not change it):
+- Python: /home/zxh/anaconda3/envs/vpm-mani/bin/python  (Python 3.10, torch 2.12, pydantic 2.13, PyYAML 6, numpy 2.2). pytest is NOT installed: write tests with the standard library `unittest`.
+- Do not pip/conda install anything. No network. Do not read or write outside /home/zxh/projects_dir/vpm-claude except reading the Python environment itself.
+- The package is used from the repo root (no installation); tests run with the gate command below.
+
+Create exactly these (you may add small private helpers inside vpmkit/ if needed):
+  vpmkit/__init__.py
+  vpmkit/api.py                 # candidate-facing API: predicate decorator, bool_margin, re-exports
+  vpmkit/geometry.py            # batched torch geometry helpers
+  vpmkit/world.py               # ObjState, WorldState, ObjView, WorldView, ObjSpec, BindingAPI protocol
+  vpmkit/artifact/__init__.py
+  vpmkit/artifact/literals.py   # literal parsing
+  vpmkit/artifact/schema.py     # pydantic models for stage_graph.yaml + semantic checks
+  vpmkit/artifact/loader.py     # load a candidate directory into a Candidate object
+  vpmkit/artifact/astcheck.py   # static AST restrictions
+  vpmkit/runtime/__init__.py
+  vpmkit/runtime/automaton.py   # pure tensor automaton update
+  vpmkit/runtime/teacher.py     # Teacher: evaluate instances, update automaton, progress, phi, guidance
+  vpmkit/resources/candidate_api.md   # English doc of everything a candidate author may use (see spec)
+  tests/__init__.py
+  tests/fixtures/toy/stage_graph.yaml, predicates.py, progress.py, bindings.py   # synthetic toy candidate
+  tests/test_*.py               # unit tests
+Leave untouched: docs/, VPM_idea.md, README.md, references/, .gitignore.
+</task>
+
+<spec>
+Conventions: all tensors are batched over N environments (or N frames) on one device; quaternions are (w, x, y, z); lengths in meters; world z axis points up; table top is z = 0. Margins are float32 tensors of shape [N]; a predicate HOLDS iff margin >= 0. Code comments and docstrings in English.
+
+1. vpmkit/world.py
+- ObjState (dataclass): pos [N,3], quat [N,4], linvel [N,3], angvel [N,3], half_size [N,3], kind: str in {"actor","site","gripper","table"}, attrs: dict[str, Tensor] (each with leading dim N). For kind "gripper" the attrs include "width" [N] (finger opening) and "arm_qvel" [N,D].
+- WorldState (dataclass): N: int, device, objects: dict[str, ObjState] keyed by the candidate's object handle (e.g. "g", "cube"), grasping: dict[tuple[str,str], BoolTensor[N]] keyed by (gripper_handle, obj_handle), contacts: dict[tuple[str,str], Tensor[N]] (contact force norm, store each unordered pair once), official: dict[str, Tensor[N,...]] (environment-provided judgments; candidates must never see these), meta: dict.
+  Methods: `to(device)`, `index(idx)` (select along N with a LongTensor/BoolTensor), `WorldState.cat(list)` (concatenate along N; all must share the same keys), `validate()` (shape/dtype checks with clear errors).
+- ObjView: read-only wrapper over one ObjState given to predicates. Properties: pos, quat, linvel, angvel, half_size, kind; `attr(key)` returns attrs[key] (KeyError with a clear message if missing); for kind "gripper" also properties `width` and `arm_qvel`. It stores its handle in a private slot `_handle` used only by WorldView; do not expose a public name.
+- WorldView: what predicates receive as `w`. Only these members: `N`, `device`, `grasping(g, o) -> BoolTensor[N]`, `contact_force(a, b) -> Tensor[N]` (order-insensitive lookup), `bool_margin(b) -> Tensor[N]` (+1.0 where b else -1.0). There is deliberately NO accessor for objects by name and NO access to `official`.
+- ObjSpec (dataclass) and BindingAPI (typing.Protocol): the contract used by `bindings.py` (implemented by the simulator adapter in M2). BindingAPI methods: `gripper() -> ObjSpec`, `actor(actor, half_size, attrs=None) -> ObjSpec`, `site(source, attrs=None) -> ObjSpec`, `table() -> ObjSpec`. ObjSpec fields: kind, source (opaque object), half_size (tensor/float/sequence/zero-arg callable or None), attrs (dict of tensor or zero-arg callable). M1 only defines these types; nothing in M1 executes bindings.
+
+2. vpmkit/geometry.py (pure torch, batched, differentiable where natural): quat_normalize, quat_mul, quat_conj, quat_apply(q, v) (rotate vectors), quat_to_matrix, quat_to_euler_xyz(q) (must equal pytorch3d's `matrix_to_euler_angles(quaternion_to_matrix(q), "XYZ")`; port that algorithm exactly), pose_mul(p1,q1,p2,q2), pose_inv(p,q), to_local(frame_p, frame_q, points) (express world points in a frame), from_local, body_axis(q, i) (i-th column of the rotation matrix), angle_between(u, v), dist(a_pos, b_pos), xy_dist, obb_corners(pos, quat, half_size) -> [N,8,3], obb_min_z, obb_max_z.
+
+3. vpmkit/api.py (what candidate files import):
+- `predicate(*, desc: str, need_true: str, need_false: str | None = None, scale: float = 1.0)` decorator. It inspects the signature: first parameter must be named `w`; the following positional parameters without defaults are object parameters; keyword-only parameters with int/float defaults are thresholds; anything else is an error raised at decoration time. It attaches `fn.__vpm_predicate__ = PredicateSpec(name, desc, need_true, need_false, scale, obj_params: tuple[str,...], thresholds: dict[str,float])` and returns fn unchanged. Templates use `{<object parameter name>}` placeholders.
+- Re-export `geometry` as `G`, and `bool_margin` (same as WorldView.bool_margin but as a free function).
+
+4. vpmkit/artifact/literals.py
+- Grammar: literal := ["not" whitespace | "¬"] IDENT "(" [IDENT ("," IDENT)*] ")"; IDENT = [A-Za-z_][A-Za-z0-9_]*; whitespace-tolerant. `parse_literal(s) -> Literal(pred: str, args: tuple[str,...], positive: bool)`; `Literal.instance_key` = f"{pred}({', '.join(args)})". Raise LiteralSyntaxError with the offending text.
+
+5. vpmkit/artifact/schema.py (pydantic v2, extra fields forbidden)
+  StageGraph:
+    task: str
+    objects: dict[str, ObjectDecl]          # handle -> {name: display name used in templates}
+    stages: list[Stage]                      # at least one
+    official: list[OfficialDecl] = []        # {literals: [str, ...] (non-empty), key: str}
+    params: list[ParamDecl] = []             # {name: str, default: float, range: [lo, hi]}
+    runtime: RuntimeCfg = {debounce: 2}      # debounce: int >= 1
+  Stage: {name: str (unique), exit: list[str] (non-empty literals), invariants: list[Invariant] = []}
+  Invariant: {literal: str, regress_to: str (name of an EARLIER stage), event: str (template with {object handle} placeholders)}
+  Parameter names: "<predicate>.<threshold>" or "progress.<stage>.<param>".
+  `check_graph(graph, predicate_specs, progress_specs) -> list[Issue]` returns ALL problems (not just the first): literal syntax; unknown predicate; wrong number of object arguments; undefined object handle; regress_to not earlier; duplicate stage names; event placeholders that are not object handles; params that do not match an existing threshold/progress keyword; default outside range or lo >= hi; a predicate used in a negative literal without need_false template; a predicate used in an `official` declaration whose thresholds appear in `params` (official thresholds must stay fixed). Issue = dataclass(code: str, message: str, where: str).
+
+6. vpmkit/artifact/astcheck.py: `check_candidate_ast(candidate_dir) -> list[Issue]` over predicates.py, progress.py, bindings.py.
+- predicates.py and progress.py: imports allowed only from `torch`, `math`, `vpmkit.api`, `vpmkit.geometry`; progress.py may also import from the sibling module `predicates`. Forbidden names: eval, exec, compile, open, __import__, globals, locals, getattr, setattr, delattr, vars. Forbidden attribute names anywhere in these two files: item, tolist, numpy, cpu, name, _name, _handle, official, env, unwrapped, scene, agent. No `for` or `while` statements inside predicate or progress function bodies (comprehensions are allowed). Every top-level function in predicates.py that is used as a predicate must carry the @predicate decorator (undecorated helper functions are allowed). Progress functions are top-level functions named `progress_<stage name>` whose signature is (w, o, *, <params with int/float defaults>).
+- bindings.py: must define top-level `bind(env, api)`; imports allowed only from torch, math, numpy, vpmkit.api, vpmkit.geometry, vpmkit.world; forbidden names as above except getattr is allowed. It may access the environment freely.
+
+7. vpmkit/artifact/loader.py
+- `load_candidate(path) -> Candidate`. Parses stage_graph.yaml (yaml.safe_load), validates the pydantic model, runs the AST check, imports the three Python files by file path under unique module names (progress.py must be able to `from predicates import x`: make the just-loaded predicates module importable under that name only while importing progress.py, then restore sys.modules/sys.path), collects predicate functions (those with __vpm_predicate__), progress functions, and `bind`. Then runs check_graph. If any issue exists, raise CandidateError(issues) carrying the full list. A candidate missing progress.py is allowed (all stages then use the default progress).
+- Candidate: graph, dir, predicates: dict[name, fn], predicate_specs, progress: dict[stage name, fn], progress_specs, bind, params: dict[str, float] (current values, initialised from graph.params defaults), `with_params(overrides) -> Candidate` (copy; rejects unknown names and out-of-range values), `display_names`.
+
+8. vpmkit/runtime/automaton.py — pure functions on tensors, no Python loops over N.
+Compiled tables (built by Teacher): K stages; I distinct predicate instances (ordered by first appearance in stage exits, then invariants, then official); per stage k the exit literals (instance index, polarity); a list of J invariants, each (owner stage index, instance index, polarity, target stage index, event template). The "done" state is stage index K: its invariants are (a) every exit literal of stage K-1, target K-1, event template = that literal's guidance template rendered with display names, and (b) every invariant of stage K-1 with its own target and event. Invariant ids are global in [0, J).
+`automaton_step(stage[N] long, counters[N,J] int, value[N,I] bool, tables, debounce) -> (new_stage, new_counters, event[N] long (-1 = none), regressed[N] bool)`:
+  1. literal truth: positive -> value; negative -> ~value.
+  2. active invariants are those owned by the current stage (owner K means the done state). counters = where(active & violated, counters+1, 0).
+  3. triggered = active & counters >= debounce. Where any triggered: new_stage = minimum target among triggered; event = id of the triggered invariant with that minimum target (ties -> lowest id); counters of that row reset to 0; no advancing this step.
+  4. Otherwise advance repeatedly (at most K times): while stage < K and every exit literal of the current stage is true, stage += 1. Rows whose stage changed get counters reset to 0. A newly entered stage's invariants are first checked on the next call.
+
+9. vpmkit/runtime/teacher.py
+- `Teacher(candidate, num_envs, device="cpu")`: compiles the tables above.
+- `evaluate(ws: WorldState) -> (margin[N,I] float32, value[N,I] bool)`: stateless; calls each predicate as fn(WorldView(ws), *ObjViews for the instance's handles, **current thresholds); a bool return is converted with bool_margin; anything not shaped [N] or containing NaN/Inf raises TeacherError naming the instance.
+- `progress_all(ws, margin, value) -> raw[N,K]`: stage k uses progress_<name>(WorldView, ObjNamespace, **params) if defined (ObjNamespace exposes the bound ObjViews as attributes by handle, e.g. o.cube), else the default progress: mean over the stage's exit literals of (1 if the literal is true else clamp(1 + s/scale, 0, 1)) where s = margin for a positive literal and -margin for a negative literal, and scale is the predicate's declared scale.
+- `reset(mask=None, stage=None)`: rows in mask (all if None) get stage (0 if None) and zero counters.
+- `step(ws) -> TeacherOutput`: evaluate -> automaton_step -> progress (clamped to [0,1]; the raw values are kept) -> phi = where(stage == K, 1.0, (stage + p) / K) -> guidance masks. TeacherOutput fields: stage, stage_progress, progress_raw, phi, margin, value, need_true[N,I] (positive exit literals of the current stage that are false), need_false[N,I] (negative exit literals of the current stage whose instance is true), event, regressed, done (stage == K). In the done state both guidance masks are all False and stage_progress is 0.
+- `run_sequence(ws_frames, initial_stage=0) -> TeacherOutput with leading dim T`: for ONE trajectory whose T frames are stacked along N; evaluates all predicates on all frames in one call, then runs automaton_step sequentially over time with a batch of 1, then gathers progress. Must give exactly the same result as calling reset + step frame by frame.
+- `render_guidance(out, row) -> list[str]` in exit-literal order using need_true / need_false templates with display names; `render_event(event_id) -> str`.
+- Everything must work on CPU and CUDA devices; tests use CPU only.
+
+10. vpmkit/resources/candidate_api.md: concise English documentation for candidate authors: directory layout (stage_graph.yaml, bindings.py, predicates.py, progress.py, optional notes.md), YAML fields with an example, literal syntax incl. negation, the margin convention, the decorator, WorldView/ObjView members, geometry helpers, params naming, the official block (each entry: literals whose conjunction must equal an environment judgment frame by frame; their thresholds stay fixed), runtime semantics (linear stages, invariants with debounce, multi-advance, done state, default progress), and the AST rules. Keep it accurate to the code.
+
+11. Tests (unittest, CPU, no simulator) covering at least: literal parsing incl. negation and errors; schema issues (each check above produces its Issue code); AST violations (forbidden import, .item(), for-loop in a predicate, reading `.name`, missing decorator, missing bind); decorator signature errors; geometry (quaternion round trips, quat_apply vs matrix, quat_to_euler_xyz on known rotations, OBB min z of a rotated box); WorldState.cat/index; automaton: single advance, multi-advance in one step, negated guard literal, regression with debounce 2 (a 1-step violation does not regress, a 2-step one does), several invariants triggering at once (minimum target), done state entered and left, counters reset on stage change; Teacher: phi values, guidance masks and rendered strings, default progress, a custom progress function, run_sequence equals step-by-step, with_params changes a threshold's effect, a predicate returning NaN raises TeacherError.
+Use tests/fixtures/toy/ as the synthetic candidate: objects g (gripper), block (actor), region (site); predicates gripper_open(g), near(g, block), grasped(g, block) (via w.grasping), in_region(block, region); stages reach -> grasp -> carry (invariant grasped(g, block) regressing to grasp) -> release (exit: in_region(block, region), not grasped(g, block)). Its bindings.py must use the BindingAPI calls (it is only AST-checked in M1). Build synthetic WorldStates in the tests directly.
+</spec>
+
+<verification_loop>
+Run from the repo root and make it fully green before finishing:
+  cd /home/zxh/projects_dir/vpm-claude && /home/zxh/anaconda3/envs/vpm-mani/bin/python -m unittest discover -s tests -t . -v
+Also run: /home/zxh/anaconda3/envs/vpm-mani/bin/python -c "import vpmkit, vpmkit.runtime.teacher, vpmkit.artifact.loader"
+Confirm `git status` shows only new files under vpmkit/ and tests/.
+</verification_loop>
+
+<action_safety>
+Keep changes scoped to the files listed. Do NOT run git add or git commit; leave the work uncommitted. Do not install packages, do not use the network, do not touch files outside the repo. Do not modify docs/, VPM_idea.md, README.md, references/.
+</action_safety>
+
+<structured_output_contract>
+End with a report:
+  1. What you built (module by module, one line each) and any spec point you interpreted or deviated from
+  2. Files created
+  3. Gate outcome: the unittest summary line (tests run / failures / errors)
+  4. Open questions or decisions you want the orchestrator to make
+</structured_output_contract>

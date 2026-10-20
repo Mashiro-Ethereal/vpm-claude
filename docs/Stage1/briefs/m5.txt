@@ -1,0 +1,57 @@
+<task>
+Implement milestone M5 of `vpmkit` in /home/zxh/projects_dir/vpm-claude (branch `stage1-impl`): the PBRS reward wrapper that turns a candidate (process teacher) into a shaped reward for RL on ManiSkill, plus smoke tests and a CLI entry. M1–M4 exist; read vpmkit/runtime/teacher.py, vpmkit/adapters/maniskill.py and vpmkit/__main__.py first and reuse them.
+
+Environment (fixed): Python /home/zxh/anaconda3/envs/vpm-mani/bin/python (torch+CUDA, mani_skill 3.0.1 editable from /home/zxh/projects_dir/ManiSkill — read-only). No installs, no network, GPU 0 only. Tests use unittest.
+
+Create:
+  vpmkit/rl/__init__.py
+  vpmkit/rl/pbrs.py
+  tests/test_pbrs_unit.py
+  tests/integration/test_pbrs_maniskill.py   (VPM_RUN_MANISKILL=1)
+and add a `smoke` subcommand to vpmkit/__main__.py. Leave docs/, VPM_idea.md, README.md, references/ untouched.
+</task>
+
+<spec>
+Reward rules (fixed design):
+  R_t = gamma * Phi(s_{t+1}) * (1 - terminated_{t+1}) - Phi(s_t) + success_bonus * success_{t+1}  [+ env_reward if use_env_reward]
+  - gamma must equal the RL algorithm's discount (constructor argument, no default hidden elsewhere).
+  - terminated (true termination: success or failure) sets the next potential to 0; truncation (time limit) does NOT: the shaping term is computed normally and the learner bootstraps.
+  - success comes from the environment (evaluate()["success"] / info["success"]), never from the teacher.
+  - Phi is computed exactly once per state by the Teacher and reused: the Phi(s_{t+1}) used at step t is the same value used as Phi(s_t) at step t+1.
+  - No reward normalisation inside the wrapper.
+
+`PBRSRewardWrapper(env, candidate, *, gamma, success_bonus=1.0, use_env_reward=False)` (gymnasium.Wrapper around a ManiSkill env created with vpmkit.adapters.maniskill.make_env, num_envs N, no auto-reset):
+  - builds a ManiSkillAdapter with candidate.bind and a Teacher(candidate, N, device=env device);
+  - reset(seed=None, options=None): resets the env; if options contains "env_idx", only those environments are reset in the teacher (Teacher.reset(mask)) and only their cached Phi is recomputed; otherwise all. Returns obs, info with info["vpm"].
+  - step(action): steps the env, snapshots, Teacher.step, computes R_t per the rules above with the cached Phi(s_t), then caches Phi(s_{t+1}). Returns obs, R (tensor [N] on the env device), terminated, truncated, info with info["vpm"] = {stage, phi, stage_progress, event, regressed, done, need_true, need_false, success, shaping (gamma*Phi'*(1-term) - Phi)}.
+  - It must not auto-reset environments; the caller resets finished ones with options={"env_idx": ...}.
+  - `guidance_text(env_index) -> list[str]` using Teacher.render_guidance on the last output.
+
+Tests:
+  - unit (no simulator): a fake vector env plus a stub adapter feeding scripted WorldStates for the toy fixture candidate (tests/fixtures/toy): exact reward values for a hand-computed sequence (advance, regression, done), termination zeroing Phi', truncation not zeroing, partial reset recomputing only selected rows, success bonus added once per success step, telescoping: with gamma = 1, bonus 0 and no termination, the sum of rewards over a window equals Phi_T - Phi_0.
+  - integration (VPM_RUN_MANISKILL=1, CUDA_VISIBLE_DEVICES=0): PickCube-v1 with candidates/reference/PickCube-v1, num_envs 8, 40 random steps: rewards finite, phi in [0, 1], stage in [0, K]; telescoping check with gamma = 1, bonus 0 on environments that did not terminate in the window (atol 1e-4); partial reset of two env indices works; StackCube-v1 with its reference candidate runs 20 steps without error.
+  - CLI: `python -m vpmkit smoke --env ID --candidate DIR [--num-envs 8 --steps 50 --gamma 0.99]` runs random actions and prints per-stage occupancy, phi statistics and reward statistics; add a short integration test that it exits 0 for PickCube.
+</spec>
+
+<simulator_constraints>
+Known limitation found in M2: SAPIEN 3.0.3 can crash natively when one process creates GPU-simulated scenes more than once (a second physx_cuda env, even after closing the first, or several tasks one after another). Any code path or test that may build more than one GPU env must give each one its own subprocess (follow `run_task` in tests/integration/test_maniskill_adapter.py). Single CPU envs (num_envs=1) may be created repeatedly. Run every command that may start the simulator with core dumps disabled and caches kept in the repo, i.e. prefix gate commands with `ulimit -c 0; export XDG_CACHE_HOME=/home/zxh/projects_dir/vpm-claude/outputs/cache PYTHONDONTWRITEBYTECODE=1;`, so that nothing is written to /var/crash or the home directory.
+</simulator_constraints>
+
+<verification_loop>
+From the repo root:
+  /home/zxh/anaconda3/envs/vpm-mani/bin/python -m unittest discover -s tests -t . -v
+  ulimit -c 0; export XDG_CACHE_HOME=/home/zxh/projects_dir/vpm-claude/outputs/cache PYTHONDONTWRITEBYTECODE=1; CUDA_VISIBLE_DEVICES=0 VPM_RUN_MANISKILL=1 /home/zxh/anaconda3/envs/vpm-mani/bin/python -m unittest tests.integration.test_pbrs_maniskill -v
+Both must pass. Confirm `git status` shows only intended changes.
+</verification_loop>
+
+<action_safety>
+Scope: the files listed. Do NOT git add/commit. No installs, no network, no writes outside the repo, do not modify /home/zxh/projects_dir/ManiSkill or the conda env. GPU 0 only.
+</action_safety>
+
+<structured_output_contract>
+End with a report:
+  1. What you built and any interpretation of the spec
+  2. Files created or changed
+  3. Gate outcomes: both unittest summary lines, plus the smoke output for PickCube
+  4. Open questions
+</structured_output_contract>
