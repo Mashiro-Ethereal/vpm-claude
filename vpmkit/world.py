@@ -41,6 +41,28 @@ class WorldState:
     def __post_init__(self):
         self.device = torch.device(self.device)
 
+    def to_dict(self) -> dict:
+        """Plain tensors and containers for torch.save (no WorldState/ObjState objects)."""
+        return {
+            "N": self.N, "device": str(self.device),
+            "objects": {
+                name: {**{key: getattr(obj, key) for key in _OBJECT_FIELDS},
+                       "kind": obj.kind, "attrs": dict(obj.attrs)}
+                for name, obj in self.objects.items()
+            },
+            **{key: dict(getattr(self, key))
+               for key in ("grasping", "contacts", "official", "meta")},
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "WorldState":
+        objects = {name: ObjState(**obj) for name, obj in data["objects"].items()}
+        # torch.load(map_location=...) can change the saved tensor device.
+        tensors = [obj.pos for obj in objects.values()] or list(data["official"].values())
+        device = tensors[0].device if tensors else data["device"]
+        return cls(data["N"], device, objects,
+                   **{key: dict(data[key]) for key in ("grasping", "contacts", "official", "meta")})
+
     def _map(self, transform, n, device):
         objects = {
             name: ObjState(

@@ -65,7 +65,8 @@ def _import_file(path, name):
     return module
 
 
-def load_candidate(path) -> Candidate:
+def load_candidate(path, *, check_ast=True) -> Candidate:
+    """Load a candidate; layered validation may report AST diagnostics separately."""
     path = Path(path).resolve()
     issues = []
     graph = None
@@ -76,7 +77,8 @@ def load_candidate(path) -> Candidate:
     except ValidationError as exc:
         issues.extend(Issue("schema", error["msg"], ".".join(map(str, error["loc"])) or "stage_graph.yaml")
                       for error in exc.errors())
-    issues.extend(check_candidate_ast(path))
+    if check_ast:
+        issues.extend(check_candidate_ast(path))
     if issues:
         raise CandidateError(issues)
 
