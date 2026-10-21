@@ -2,15 +2,15 @@
 
 > **用途：** 交接用。说明 `stage1-impl` 分支上的代码现状、重写时要用到的环境事实和经验，以及委托 Codex 的做法。设计结论以 [技术方案](00_technical_plan.md) 为准，本文只记实现。
 >
-> **现状：** 2026-10-21，你决定删掉此前写的全部 Stage1 实现代码，等议程全部确认后重写。理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。
+> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，还没有开始。
 
 ## 1. 分支与提交
 
 分支 `stage1-impl`，从 master 的 5cdd64e 分出，没有推送，也没有合并到 master。
 
 - 删除前的代码在这三个提交里，需要时可以查看：e90a127（M1 核心）、4ad5a75（M2 ManiSkill 适配层）、1b0212c（M3a 两层 validator）。
-- 2026-10-21 用 `git rm` 删去 `vpmkit/`（21 个文件，含 `resources/candidate_api.md`）和 `tests/`（18 个文件），尚未提交。
-- 其余提交都是讨论记录：07ca738、2c825e7、e2e6acc、27fccc1、581905c。
+- 2026-10-21 删去 `vpmkit/`（21 个文件，含 `resources/candidate_api.md`）、`tests/`（18 个文件）和 `docs/Stage1/briefs/`（7 个文件），随 b664da5 提交。
+- 其余提交都是文档：07ca738、2c825e7、e2e6acc、27fccc1、581905c、b664da5、d5bed7d（讨论记录与交接），c19097d（技术方案）。
 
 ## 2. 删掉的代码原来是什么（供重写时参照）
 
@@ -20,7 +20,7 @@
 - M3a 两层 validator：第一层六项检查（在子进程中运行）、逐帧核对与轨迹检查、回放摘要、第二层的提示词与解析。
 - 测试：单元测试 86 个，ManiSkill 集成测试 13 个。
 
-议程确认后改动了其中很多写法，例如图中没有完成节点、不输出事件、m 取 1、回退后同一步照样前进、删去逐帧核对、Stage1 不用示范（讨论记录 §4）。
+议程确认后改动了其中很多写法，例如图中没有完成节点、不输出事件、m 取 1、回退后同一步照样前进、删去逐帧核对、Stage1 不用示范（00 第 4、8 节）。
 
 ## 3. 重写时要用到的环境事实（2026-10-20、10-21 核对）
 
@@ -44,9 +44,14 @@
 
 原来的 m1–m6 任务说明是在第一版设计下写的，2026-10-21 已删除。重写的任务说明，按 [技术方案](00_technical_plan.md) 重新写。
 
-## 6. outputs/ 中的旧文件
+## 6. outputs/ 中的文件
 
-`outputs/` 不进 git。旧实现留下的 Codex 调试日志、trace 与缓存，2026-10-21 已按你的要求删除。现在只保留本会话的记录：`outputs/stage1/probe_claude_deepseek/`（DeepSeek 版 Claude Code 的实测原始记录）、`outputs/stage1/codex/`（那次 Codex 实测的任务说明与结果）、`outputs/lit_granularity/`（文献原文与核对用的目录清单）。
+`outputs/` 不进 git。2026-10-21 按你的要求整理过两次：先删去旧实现留下的 Codex 调试日志、trace 与缓存；再删去作废的记录，把文献移进 `references/`。现在只有：
+- `outputs/stage1/probe_claude_deepseek/20261021-111820/`：DeepSeek 版 Claude Code 的实测原始记录（00 第 7.7 节、01 §4.4 的依据）。那次由 Codex 跑、全部登录失败的实测（`20261021-010804/` 与 `outputs/stage1/codex/`），结论作废，已删除。
+- `outputs/stage1/env_inventory/`：核对任务与示范情况时取得的清单，包括 ManiSkill 的任务表（00 第 9.1 节的来源）、示范目录、PPO 配置的任务名单，以及 MetaWorld、LIBERO 的目录与源文件（01 §4.5、§4.6 的依据）。
+- `outputs/cache/`：缓存目录，`XDG_CACHE_HOME` 指到这里（第 4 节第 2 条）。
+
+文献对照（01 §4.3.1）用到的原文和检索记录，已移到 `references/notes/_sources/granularity_2026-10-20/`；其中 SARM 的 PDF 和 PRM4RL 的文字在 `references/` 中原本就有相同的副本（`added3_chen2026sarm.pdf`、`base_progress_reward.txt`），重复的那份已删除。`references/` 自 2026-10-21 起整个不进 git。
 
 ## 7. 委托 Codex 的做法
 
