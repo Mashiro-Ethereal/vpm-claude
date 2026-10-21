@@ -2,7 +2,7 @@
 
 > **用途：** 说明怎样把 [00 技术方案](00_technical_plan.md) 实现出来：分几步，每步交给 Codex 做什么，我怎么验收，什么时候停下来问你。做什么以 00 为准，本文只管怎么执行。
 >
-> **状态（2026-10-21）：** 已确认。第 10 节的三处实现细节你全部同意，已写进 00（第 2.1、2.4、3.2–3.4、7.1、7.2、7.5、8.2 节与附录 A）。同日你又定：先在 PickCube 一个任务上走通全流程（包括生成），再扩展到其余 15 个；示例改用虚构的典型抓放任务（00 第 6.4、10.3 节）。第 1–9 节已随之改写。还没有开始 M1。
+> **状态（2026-10-21）：** 已确认。第 10 节的三处实现细节你全部同意，已写进 00（第 2.1、2.4、3.2–3.4、7.1、7.2、7.5、8.2 节与附录 A）。同日你又定：先在 PickCube 一个任务上走通全流程（包括生成），再扩展到其余 15 个；示例改用虚构的典型抓放任务（00 第 6.4、10.3 节）。第 1–9 节已随之改写。“准备”一步已做完（第 4.1 节），你已看过并同意；还没有开始 M1。
 
 ## 1. 总体安排
 
@@ -64,16 +64,22 @@ tests/unit/  tests/integration/  tests/fixtures/（各类错误的候选；合�
 
 - **candidate_api.md：** 按 00 第 3、4 节和第 8.2 节，写文件格式、YAML 写法、谓词与 progress 的写法、运行语义和静态规则。绑定一节先写占位，M2 之后按实际接口补全。M1 的测试要覆盖它写下的每条规则。
 - **示例：** 按 00 第 6.4 节，虚构的典型抓放任务（抓起方块、放到目标垫上、松手）：按 ManiSkill 风格写的虚构 `env_source.py`（含 `evaluate()`）、一小段场景清单、完整的候选（`stage_graph.yaml`、`bindings.py`、`predicates.py`、`progress.py`、`notes.md`）。它严格遵守每一条设计规则；绑定先按设想的接口写，M2 之后核对。写完请你看一眼：agent 会照它的风格写。
+- **完成情况（2026-10-21）：** 两者都已写好，在 `vpmkit/resources/`：`candidate_api.md` 共 10 节；`example/` 中有 `env_source.py`、`helpers.py`、`scene_inventory.md` 和 `candidate/`。写的时候定下的接口细节已写进 00（附录 B），理由见 01 §4.12。自查结果见 00 第 6.4 节。你已看过并全部同意，其中 `near` 的写法和 grasp 的不变量按讨论改过（01 §4.12 第 1、9 项）。
+- **留给后面几步的：**
+  - M1a、M1b 照 candidate_api.md 实现，字段名、签名与错误代码都以它为准；
+  - M2 之后核对它的绑定一节（第 5 节）；
+  - M2 生成场景清单、M4a 生成 `helpers.py`，都照示例中的格式。
 
 ### 4.2 M1a 运行时
 
 - **内容：** world、geometry、predicate、literal、automaton、teacher、render；参数覆盖（供 BO 用）；快照的保存与读取（供离线重算用）。
-- **关键接口**（细节写进任务说明）：
-  - 谓词：`@predicate(desc, need_true, need_false, scale)`，签名 `f(w, *对象, **阈值) -> margin [N]`。
-  - 对象视图：位姿、线速度与角速度、半尺寸 `[N, 3]`、附加属性。夹爪视图：TCP 位姿、开度、手臂关节速度、`grasping(对象)`。带关节物体的关节读数。不提供按名字取对象的接口。
+- **关键接口**（以 candidate_api.md 第 3–8 节为准，任务说明摘录它）：
+  - 谓词：`@predicate(desc, need_true, need_false, scale)`，签名 `f(w, *对象, **阈值) -> margin [N]`；`vpmkit.api` 导出 `predicate`、`G`、`signed`。
+  - 对象视图：`pos`、`quat`、`pose`、`lin_vel`、`ang_vel`、`half_size` `[N, 3]`、附加属性；带关节的物体另有 `joint_pos`、`joint_vel`、`joint_limits`。夹爪视图：TCP 的位姿与速度、`width`、`max_width`、`arm_qvel`。世界视图：`table_z`、`grasping(g, o)`、`contact_force(a, b)`、`batch_size`、`device`。不提供按名字取对象的接口。
   - Teacher：`reset(env_idx, stage=None)`；`step(world)` 返回 00 第 4.4 节的六个字段；`evaluate_offline(快照序列, 初始阶段)`；`render(输出, i)`。
 - **测试**（用合成的快照，在 CPU 上跑）：
   - 00 第 4.2 节的例子逐个写成测试：PickCube 搬运中方块滑落（夹爪还近，停在 grasp；已经远了，停在 reach）；StackCube 松手。
+  - 示例的 grasp：爪子离开方块附近（`near` 不成立），回到 reach，guidance 是“靠近方块”；还在附近、没抓住时停在 grasp。
   - 自动机的规则：同一步连续前进；几条不变量同时不成立，回到最早的阶段；新进入的阶段从下一步才查不变量；m = 2 时的计数与清零；按 env_idx 重置；从存下的阶段开始。
   - 最后一个阶段的条件全部成立时，guidance 为空、progress 为 1。
   - 取反的真值与 margin；默认 progress 的公式；布尔谓词的 margin 为 ±1。
@@ -85,8 +91,8 @@ tests/unit/  tests/integration/  tests/fixtures/（各类错误的候选；合�
 ### 4.3 M1b 候选的静态检查
 
 - **内容：** `stage_graph.yaml` 的 pydantic 模型；候选目录的加载；00 第 8.2 节第一层的第 1–3 项（解析；schema 与引用，含四项新检查；AST 限制）；报告用 JSON，附 Markdown 摘要，每条问题有错误代码、位置和说明。
-- **测试：** 示例（`resources/example/`）作合法候选，不误报；`tests/fixtures/` 中每类错误各放一个；candidate_api.md 中的 YAML 示例也要能通过。
-- **验收：** 每类错误都报对，位置也对；合法候选不误报。
+- **测试：** 示例（`resources/example/candidate/`）作合法候选，不误报；`tests/fixtures/` 中，candidate_api.md 第 9.1–9.3 节的每个错误代码至少一个。candidate_api.md 中只有格式模板和片段，完整的 YAML 就是示例的 `stage_graph.yaml`。
+- **验收：** 每类错误都报对，代码和位置也对；合法候选不误报。
 
 ## 5. M2 ManiSkill 适配层（用 GPU）
 
@@ -98,7 +104,8 @@ tests/unit/  tests/integration/  tests/fixtures/（各类错误的候选；合�
   - 场景清单：包括 `evaluate()` 用到的属性的实际值。做法是用 `ast` 找出 `evaluate()`（含内嵌函数）读到的 `self.<属性>`，再从运行中的环境读值，不需要逐任务手写。
   - 辅助函数对照表：PickCube 的 `evaluate()` 用到的条目（`is_grasping`、`Panda.is_static`）。
 - **集成测试：** PickCube 开一个子进程，按场景清单绑定全部动态物体，检查读数的形状、设备和数值是否合理；`w.grasping` 与 `agent.is_grasping` 一致；场景清单中 `goal_thresh` 的实际值正确（按机器人取，见 01 §4.3）。
-- **M2 之后：** 我按实际接口补全 candidate_api.md 的绑定一节，并核对示例中绑定的写法。
+- 场景清单照示例 `resources/example/scene_inventory.md` 的格式生成。
+- **M2 之后：** 我按实际接口补全 candidate_api.md 的绑定一节，并核对示例中绑定的写法；核对完删去该节开头的提醒注释。
 
 ## 6. M3 参照候选与第一层（用 GPU）
 
@@ -117,7 +124,8 @@ tests/unit/  tests/integration/  tests/fixtures/（各类错误的候选；合�
 - **内容：**
   - 删奖励函数：用 `ast` 定位行号，从原文删去；剩下的文本中还有 reward，就报错；
   - TASK.md：环境名、文档字符串、回合上限、要产出什么、设计规则、怎么运行检查；
-  - helpers.py、scene_inventory.md、`example/`（示例，取自 `vpmkit/resources/`）、manifest.json（各文件的来源、版本、哈希）。
+  - helpers.py（照示例 `resources/example/helpers.py` 的格式）、scene_inventory.md、`example/`（示例，取自 `vpmkit/resources/`）、manifest.json（各文件的来源、版本、哈希）；
+  - candidate_api.md 的绑定一节还留着 M2 的提醒注释时，拒绝生成。
 - **测试：**
   - 已核对过的 5 个源文件，删完后的行数与记录一致：216→186、144→111、186→145、360→300，StackPyramid 不变；
   - PullCubeTool、TurnFaucet、PushT 被拦下（00 第 6.2 节）；
@@ -137,7 +145,7 @@ tests/unit/  tests/integration/  tests/fixtures/（各类错误的候选；合�
   - 用脚本后端在 PickCube 的输入包上跑完整的循环：直接给出 PickCube 的参照候选，一轮通过；先给出写坏的候选，第一层不过，修复轮再给出好的，最后通过；
   - 参数与环境变量的单元测试，其中检查不含 `CLAUDE*`、`ANTHROPIC*`；
   - 第二层输出的解析：合法、缺字段、不是 JSON 三种情况。
-- **PickCube 试跑（调用 DeepSeek，开始前问你）：** 用 PickCube 的输入包端到端跑一次。从你的终端和从我这边各启动一次，确认两边都能登录、工具限制一致、都能走完。生成的候选与参照候选逐项对比：阶段划分、守卫与不变量、官方对应与阈值、progress、模板、notes.md。我写一份对比报告，你看过再定怎么扩展。
+- **PickCube 试跑（调用 DeepSeek，开始前问你）：** 用 PickCube 的输入包端到端跑一次。“走通”的标准见 00 第 10.3 节：harness 把生成和两层检查完整走完一遍，候选通过与否都算，暂不考虑候选的性能。从你的终端和从我这边各启动一次，确认两边都能登录、工具限制一致、都能走完。生成的候选与参照候选逐项对比：阶段划分、守卫与不变量、官方对应与阈值、progress、模板、notes.md。我写一份对比报告，你看过再定怎么扩展。
 
 ## 8. M5 PBRS 奖励包装（用 GPU）
 

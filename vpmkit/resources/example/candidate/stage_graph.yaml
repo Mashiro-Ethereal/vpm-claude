@@ -1,0 +1,28 @@
+task: Pick up the red cube, place it on the target pad, and let go of it.
+objects:
+  g:    {name: the gripper}
+  cube: {name: the red cube}
+  pad:  {name: the target pad}
+stages:
+  - name: reach
+    exit: ["near(g, cube)"]
+  - name: grasp
+    exit: ["grasped(g, cube)"]
+    invariants:
+      - {literal: "near(g, cube)", regress_to: reach}
+  - name: carry
+    exit: ["on(cube, pad)"]
+    invariants:
+      - {literal: "grasped(g, cube)", regress_to: reach}
+  - name: release
+    exit: ["not grasped(g, cube)", "static(cube)"]
+    invariants:
+      - {literal: "on(cube, pad)", regress_to: reach}
+official:
+  - {literals: ["grasped(g, cube)"], key: is_cube_grasped}
+  - {literals: ["on(cube, pad)"], key: is_cube_on_pad}
+  - {literals: ["static(cube)"], key: is_cube_static}
+  - {literals: ["on(cube, pad)", "static(cube)", "not grasped(g, cube)"], key: success}
+params:
+  - {name: near.max_dist, default: 0.02, range: [0.0, 0.05]}
+  - {name: progress.reach.d0, default: 0.3, range: [0.1, 0.6]}

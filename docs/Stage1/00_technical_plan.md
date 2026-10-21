@@ -2,7 +2,7 @@
 
 > **用途：** 把 2026-10-19 至 10-21 逐点讨论定下的做法，按系统结构整理成一份方案，说明 Stage1 最终怎么做。这里不记讨论经过，也不记被推翻的方案；完整的讨论与依据见[讨论记录](01_design_discussion.md)，各节末尾注明出处。代码现状与重写时要用的环境经验见 [02](02_implementation_status.md)；怎么执行（分步、委托 Codex、验收）见 [05](05_implementation_plan.md)。
 >
-> **状态（2026-10-21）：** 议程第 1–9 点全部已定，只有 G1 推迟。旧的实现代码已删除，按本文第 10 节的实现阶段重写：先在 PickCube 一个任务上走通全流程（包括生成），再扩展到其余 15 个。
+> **状态（2026-10-21）：** 议程第 1–9 点全部已定，只有 G1 推迟。旧的实现代码已删除，按本文第 10 节的实现阶段重写：先在 PickCube 一个任务上走通全流程（包括生成），再扩展到其余 15 个。接口说明 candidate_api.md 与示例已写好（`vpmkit/resources/`，第 6.3、6.4 节），你已看过并全部同意；还没有开始 M1。
 >
 > **写法约定：**
 > - 本文的条目都是已定的做法，不再逐条标【决定】；【事实】【假设】【待定】照常标出。
@@ -78,7 +78,7 @@
    | 阶段 | 守卫 | 不变量 → 回退目标 |
    | --- | --- | --- |
    | 0 reach | `near(g, red)` | — |
-   | 1 grasp | `grasped(g, red)` | — |
+   | 1 grasp | `grasped(g, red)` | `near(g, red)` → reach |
    | 2 carry | `on(red, green)` | `grasped(g, red)` → reach |
    | 3 release | `not grasped(g, red)`、`static(red)` | `on(red, green)` → reach |
 
@@ -109,9 +109,10 @@
 - **没有完成节点：** 最后一个阶段的守卫后面不再有阶段，它只用于该阶段的 guidance 和 progress。最后一个阶段的守卫加它的不变量，合起来必须等于环境的 success，并在 `official` 中声明。
 - **`official`：** agent 声明的对应关系，每条是“一组文字的合取 ↔ `evaluate()` 返回的一个键”。第二层审查对照源码逐条核对；程序也靠它知道哪些谓词是照官方判定改写的，这些谓词的阈值固定。
 - **`params`：** 内层 BO 的搜索空间，每项写名字、默认值和范围。谓词阈值命名为 `<谓词>.<阈值名>`，如 `near.max_dist`；progress 的参数命名为 `progress.<阶段名>.<参数名>`，如 `progress.reach.d0`。默认值同时写在函数签名和 `params` 中时，两处必须相同。照官方判定改写的谓词，阈值不放进来。
-- **防闪烁参数** `runtime.debounce`（即 m）保留，默认为 1。
+- **防闪烁参数** `runtime.debounce`（即 m）保留，默认为 1。它是运行时的设置，不写进候选；参数覆盖时用这个名字（M1 的测试用它设 m = 2）。
+- 字段、类型与写法的细节见接口说明 `vpmkit/resources/candidate_api.md`（第 6.3 节）。
 
-PickCube 参照候选的 `stage_graph.yaml` 大致如下（M3 照此写）。`grasped`、`at_goal`、`arm_static` 照官方判定写，阈值固定，所以 `params` 中只有 `near` 的阈值。
+PickCube 参照候选的 `stage_graph.yaml` 大致如下（M3 照此写）。`grasped`、`at_goal`、`arm_static` 照官方判定写，阈值固定，所以 `params` 中只有 `near` 的阈值。`near` 照示例的写法：TCP 到方块中心的距离 ≤ 方块的半对角线 + `max_dist`，只要求爪子到了方块附近（第 6.4 节）；grasp 保持 `near(g, cube)`，爪子离开方块附近就回到 reach。
 
 ```yaml
 task: Pick up the red cube and move it to the goal position
@@ -124,6 +125,7 @@ stages:
     exit: ["near(g, cube)"]
   - name: grasp
     exit: ["grasped(g, cube)"]
+    invariants: [{literal: "near(g, cube)", regress_to: reach}]
   - name: carry
     exit: ["at_goal(cube, goal)"]
     invariants: [{literal: "grasped(g, cube)", regress_to: reach}]
@@ -165,8 +167,9 @@ def near(w, g, o, max_dist=0.02):    # f(w, *对象, **阈值) -> margin [N]
     return max_dist - d               # ≥ 0 表示成立
 ```
 
-- margin ≥ 0 表示成立，单位由谓词说明。布尔读数（如是否抓住）的 margin 取 +1 或 −1。margin 同时供 guidance、默认 progress 和诊断使用。
-- 阈值是带默认值的关键字参数；`scale` 供默认 progress 使用（第 3.5 节）。
+- margin ≥ 0 表示成立，单位由谓词说明（写在 `return` 旁的注释里）。布尔读数（如是否抓住）的 margin 取 +1 或 −1，用 `signed(flag)` 转换。谓词本身是合取时（如官方判定的两项），margin 取各项 margin 的最小值，各项先化成同一单位。margin 同时供 guidance、默认 progress 和诊断使用。
+- 签名：第一个参数是 `w`；对象参数在前，没有默认值；阈值在后，默认值是数字字面量（第一层不运行代码就能与 `params` 对照）。`scale` 供默认 progress 使用（第 3.5 节）。
+- 直接调用谓词时（在 progress 或别的谓词中），没有显式传入的阈值取当前生效的值：默认值，或 BO 调定的值。
 
 **规则：**
 1. **以对象为参数：** 物体只经参数进入。谓词体内不写死本任务的物体名，也不读任务特有的读数；这类读数在绑定中挂到对象上，谓词经参数读取。这样，谓词能在别的任务的状态上运行，供事后归纳词表时交叉执行。
@@ -181,7 +184,7 @@ def near(w, g, o, max_dist=0.02):    # f(w, *对象, **阈值) -> margin [N]
 
 **官方字段的用法：**
 - 谓词一律不读 `evaluate()` 返回的字段。
-- 通用函数算出的判定，作为适配层读数提供，谓词直接用。例如 Panda 的 `is_grasping(obj)` 是读数 `w.grasping`，`grasped(g, o)` 只是把它转成 ±1。
+- 通用函数算出的判定，作为适配层读数提供，谓词直接用。例如 Panda 的 `is_grasping(obj)` 是读数 `w.grasping(g, o)`（用它的默认参数），`grasped(g, o)` 只是把它转成 ±1。
 - 要用任务特有的官方判定，就照 `evaluate()` 的源码，把公式改写成以对象为参数的谓词，并在 `official` 中声明对应哪个字段。阈值照抄官方值，固定，不放进 `params`。
 - 含义不合适的官方判定，自己写谓词，不声明对应。例：StackPyramid 的“相邻”只看水平距离，把叠在一起也算进去了。
 - `success` 不做成谓词，成功信号直接取环境的 success。
@@ -195,6 +198,9 @@ def near(w, g, o, max_dist=0.02):    # f(w, *对象, **阈值) -> margin [N]
 - 只依赖当前状态和当前阶段。归一化只用固定的尺度参数（如 reach 阶段的距离尺度 d0），在 `params` 中声明默认值和范围。
 - **默认 progress**（没写 progress 的阶段）：守卫中的每条文字，成立记 1，不成立记 clip(1 + margin/scale, 0, 1)，再取平均。这样，progress 与 guidance 指向同一组条件。
 - **布尔条件的阶段不写 progress：** 例如守卫只有 `grasped` 的阶段，只有完成和没完成两种情况；默认 progress 在文字不成立时为 0，成立时阶段直接前进。距离类、角度类条件的阶段可以写 progress，给出阶段内的塑形。
+- progress 用 `from .predicates import ...` 调用本任务的谓词与测量函数。
+- 每一步对所有阶段都计算 progress（第 8.2 节的运行检查也靠这一点查出到不了的阶段里的错误），所以 progress 函数在任何状态下都要能算，谓词同理。
+- **最后一个阶段：** 守卫全部成立时，progress 取 1，不论 progress 函数返回什么。这样第 4.3 节说的“成功之后 progress 为 1”对自写的 progress 也成立。
 - 阶段交界处的 Φ 不要求连续，PBRS 不要求势值连续。
 
 出处：01 §4.2。
@@ -202,14 +208,17 @@ def near(w, g, o, max_dist=0.02):    # f(w, *对象, **阈值) -> margin [N]
 ### 3.6 绑定与世界视图
 
 - **绑定：** `bind(env, api) -> {对象名: 对象说明}`，指明每个对象对应哪个 actor 或 site、尺寸，以及附加属性（可以是每步重读的函数）。绑定是候选中唯一能读环境内部的代码，由第一层的运行检查覆盖。
+  - `bind` 以一个字典字面量返回，键与 `objects` 完全相同，第一层不运行代码就能核对。
+  - 设想的接口：`api.gripper()`；`api.actor(actor, half_size, **附加属性)`；`api.site(pose, half_size, **附加属性)`，site 的速度为 0、不能被抓。M2 之后按实际接口核对（candidate_api.md 第 7 节）。
 - **世界快照：** 适配层每步从环境读出一份张量快照。谓词和 progress 只读快照，不碰环境，所以保存的状态可以离线重算，谓词也能直接在别的任务的快照上交叉执行。快照包括：
   - 绑定对象的位姿、线速度与角速度、尺寸（按环境取成 [N, 3]，各并行环境可以不同），以及附加属性；
   - 夹爪的 TCP 位姿、开度、手臂关节速度，以及它对每个绑定物体的 `is_grasping`；
   - 绑定物体两两之间的接触力；
   - 带关节物体的关节读数（TurnFaucet）；没有夹爪的末端（PushT 的推杆）没有开度和“抓住”这两项；
   - `evaluate()` 返回的字段：放在快照中单独的一部分，谓词读不到，只给成功信号和 Stage2 的里程碑用。
-- **统一的世界视图：** 单位是米，世界坐标系 z 轴向上，四元数顺序统一，支撑面的顶面高度由适配层给出（ManiSkill 的桌面 z = 0）。谓词中不写死任何环境的常数。
-- **几何工具**（人写）：坐标变换、四元数、包围盒，如 `G.quat_to_euler_xyz`、`G.pose_inv`、`G.pose_mul`、`G.to_local`。
+- **统一的世界视图：** 单位是米，世界坐标系 z 轴向上，四元数顺序统一（wxyz，与 ManiSkill 相同），支撑面的顶面高度由适配层给出（`w.table_z`；ManiSkill 的桌面 z = 0）。谓词中不写死任何环境的常数。
+  - 单个物体的读数放在对象视图上（`pos`、`quat`、`pose`、`lin_vel`、`ang_vel`、`half_size` 与附加属性；夹爪视图另有 `width`、`max_width`、`arm_qvel`）；两个物体之间的读数放在世界视图上（`w.grasping(g, o)`、`w.contact_force(a, b)`）。字段的完整清单见 candidate_api.md 第 4 节。
+- **几何工具**（人写）：坐标变换、四元数、包围盒，如 `G.quat_to_euler_xyz`、`G.pose_inv`、`G.pose_mul`、`G.to_local`；共 12 个函数，清单见 candidate_api.md 第 4.4 节。
 
 出处：01 §2.1、§2.2、§3.2.9 第 1 条、§3.3 第 4 项、§4.3、§4.6、§4.8。
 
@@ -286,7 +295,7 @@ PBRS 奖励包装属于 Stage1，是交给 Stage2 的接口：
 
 1. **阶段怎么分：** 阶段边界放在接触变化处（抓住、松开）和目标关系达成处（到达、对齐、放上）；抓取、松开各自单独成段。参照示例：reach → grasp → carry → release（第 6.4 节）。任务有几种做法时，只写最自然的一种，其他做法写进 notes.md。
 2. **守卫怎么写：** 只写本段结束时必须成立、完成任务所必需的条件，通常一条。几个条件必须同时成立时才写多条，并在 notes.md 中说明理由。不为凑成一条而合成复合谓词。偏好（不是要求）：多写描述状态的条件（如 `near`：夹爪离方块近），少写一瞬间的动作（如 `gripper_open`）。
-3. **不变量和回退：** 不变量只写本段内必须一直成立、一旦破坏就要回头处理的条件；有先后的条件拆成相邻阶段，前面的条件靠不变量保持。回退目标选在建立这个条件的那一轮子目标里（这一轮的开头，或建立它的阶段），不回到更早的子目标。例（StackPyramid）：
+3. **不变量和回退：** 不变量只写本段内必须一直成立、一旦破坏就要回头处理的条件；有先后的条件拆成相邻阶段，前面的条件靠不变量保持（如示例中 grasp 保持 `near(g, cube)`：爪子在探索抓法时离开方块附近，就回到 reach）。回退目标选在建立这个条件的那一轮子目标里（这一轮的开头，或建立它的阶段），不回到更早的子目标。例（StackPyramid）：
    - C 掉了：回到 reach C 或 grasp C；
    - 放 C 时把 A 碰歪了：只有在 C 的几段中声明了不变量 `next_to(A, B)` 才会发现；这个条件建立于 A 那一轮，回到 reach A 重做。要不要声明这类不变量，由 agent 判断。
 4. **最后一个阶段：** 守卫加不变量，合起来等于环境的 success。
@@ -345,8 +354,10 @@ packages/<任务名>/
 - **candidate_api.md：** 技术规格，同一仿真器下所有任务共用。写文件格式、API、运行语义（第 4 节）和静态规则（第 8.2 节的检查项）。要点：
   - 没有完成节点和事件；m = 1；回退后同一步照样前进；
   - 四项新的 schema 检查；最后一个阶段必须对应 success；阈值按谓词；
-  - Bindings 一节按 M2 的实际接口写；取反的写法用一小段代码示范；
+  - Bindings 一节先按设想的接口写，M2 之后按实际接口核对；取反的写法用一小段代码示范；
   - 模板按“状态加补救办法”写，显示名带冠词。
+
+  2026-10-21 已写好，放在 `vpmkit/resources/candidate_api.md`，共 10 节。第 9 节给第一层的每条规则一个错误代码（如 `schema.regress_too_late`），第一层的报告用这些代码。Bindings 一节开头留了一行注释，提醒 M2 之后核对，核对完删去，生成输入包前不能留着。
 - **TASK.md：** 任务说明、要产出什么、怎么运行检查，以及第 5 节的设计规则；要求先读 candidate_api.md。
 
 ### 6.4 示例：虚构的抓放任务
@@ -356,16 +367,23 @@ packages/<任务名>/
   - 定分寸：照设计规则，阶段分多细、守卫写几条、回退指向哪里、模板怎么措辞、notes.md 写多深。agent 会照示例的风格写，所以示例严格遵守每一条设计规则；
   - 示范从环境源码到候选怎么对应：照 `evaluate()` 改写谓词、照抄阈值、声明对应，照场景清单写绑定。
 - **怎么选：** 按示范价值选，越典型、覆盖的机制越多越好，不刻意避开与评测任务相似。机器人任务本来相通，抓、放这些共用环节正是示例该示范的，不算泄漏；唯一算泄漏的，是评测任务看到自己的参照候选。示例不取自评测任务，所以 16 个任务都能生成、都计入统计。
-- **内容：** 一个虚构的典型抓放任务：抓起方块，放到目标垫上，松手。`example/` 中有按 ManiSkill 风格写的虚构 `env_source.py`（含 `evaluate()`）、一小段场景清单和完整的候选，由我写，所有任务看到同一份。
+- **内容：** 一个虚构的典型抓放任务：抓起方块，放到目标垫上，松手。由我写，所有任务看到同一份。2026-10-21 已写好，放在 `vpmkit/resources/example/`，布局与 agent 的工作目录相同：
+  - `env_source.py`：按 ManiSkill 风格写的虚构任务 `PlaceCubeOnPad-v1`（含 `evaluate()`），已删去两个奖励函数；
+  - `helpers.py`：`evaluate()` 用到的辅助函数（`Actor.is_static` 的源码，`is_grasping` 改用 `w.grasping(g, o)` 的说明）；
+  - `scene_inventory.md`：一小段场景清单；
+  - `candidate/`：完整的候选（`stage_graph.yaml`、`bindings.py`、`predicates.py`、`progress.py`、`notes.md`）。
+
+  场景清单和 `helpers.py` 的格式，就是 M2 生成场景清单、M4a 生成 `helpers.py` 时用的格式。
 
   | 阶段 | 守卫 | 不变量 → 回退 | 示范什么 |
   | --- | --- | --- | --- |
-  | 0 reach | `near(g, cube)` | — | 距离类守卫；自写 progress，尺度参数 `progress.reach.d0` |
-  | 1 grasp | `grasped(g, cube)` | — | 布尔谓词，不写 progress |
+  | 0 reach | `near(g, cube)` | — | 距离类守卫：`near` 量 TCP 到方块中心的距离，阈值是方块的半对角线加 `near.max_dist`（默认 0.02、范围 [0, 0.05]）；只要求爪子到了方块附近，怎么抓由 RL 在 grasp 阶段探索；测量函数供谓词与 progress 共用；自写 progress，尺度参数 `progress.reach.d0`（默认 0.3，范围 [0.1, 0.6]） |
+  | 1 grasp | `grasped(g, cube)` | `near(g, cube)` → reach | 布尔谓词，不写 progress；前一段的条件靠不变量保持：爪子离开方块附近就回到 reach |
   | 2 carry | `on(cube, pad)` | `grasped(g, cube)` → reach | 不变量与回退；`on` 照官方判定改写，阈值照抄，声明对应 |
   | 3 release | `not grasped(g, cube)`、`static(cube)` | `on(cube, pad)` → reach | 取反与 need_false 模板；两条文字的守卫，在 notes.md 说明理由；最后一个阶段的守卫加不变量等于 success；`Actor.is_static` |
 
 - **不必能运行：** 谓词与 progress 只读世界视图，在合成快照上测试，示例兼作 M1 的合法玩具候选。绑定写的是虚构环境的属性，M2 之后按实际接口核对写法。
+- 【事实，2026-10-21 自查，不依赖 Stage1 的代码】Python 文件能编译，YAML 能解析。草稿脚本（放在会话的临时目录，不进仓库）照第 3–5 节与第 8.2 节逐条核对，没有问题；它对 9 个故意写坏的副本都报了错。`near` 在几个手算的位置上（TCP 在方块中心、在方块一角、在顶面上方 3.4 cm 与 4 cm）与公式一致。`on`、`static` 在 2 万个随机状态上（含落在阈值上的状态）与 `evaluate()` 的公式判定全部相同。notes.md 中回退的几个例子（含 grasp 中爪子离开方块附近），用第 4.2 节的更新规则逐个推过，结果与文中一致。完整的运行验证在 M1。
 - **PickCube 的参照候选：** 由人写（M3），作第一层与运行时在真实环境上的测试样例，以及 PickCube 试跑的答案；不放进任何输入包。
 - 【假设】只有一个抓放示例，agent 可能把 reach → grasp → carry 照搬到推、拉、滚这类不需要抓取的任务上。第 1 组（PushCube、PullCube、RollBall）会看出来，必要时补一个推的示例。
 
@@ -467,16 +485,25 @@ claude-deepseek -p <prompt>
      - 同一守卫中不能同时有 p 和 `not p`（这个阶段永远出不去）；
      - 不变量不能与本阶段的守卫矛盾（不变量要求 p 成立，守卫里却有 `not p`，或者反过来）；
      - 回退目标不能晚于建立那条文字的阶段：不变量的文字，必须出现在从回退目标到本阶段前一个阶段之间某个阶段的守卫里，否则回退后会一路走回本阶段，这条不变量形同虚设；
-     - 最后一个阶段必须声明对应 success。
+     - 最后一个阶段必须声明对应 success：`success` 一条的文字，正好是最后一个阶段的守卫文字加不变量文字。
+   - 补充（2026-10-21 写 candidate_api.md 时定；都是程序能查的，按第 5 节的分工放进静态规则）：
+     - 非官方谓词的每个阈值、每个 progress 参数，都要在 `params` 中声明；
+     - 模板的占位符只能是谓词的对象参数名；
+     - `bind` 返回字典字面量，键与 `objects` 相同；
+     - 谓词与 progress 的签名照第 3.4、3.5 节，progress 的函数名对得上阶段；
+     - `official` 中同一个键只出现一次；键是否真由 `evaluate()` 返回，放到运行检查中查。
 3. **AST 限制：**
-   - `predicates.py`、`progress.py` 只能 import torch、math 和 vpmkit 提供的接口；不能用 `.item()`、`.tolist()`、`.numpy()`、`.cpu()`；谓词与 progress 的函数体内没有 for、while；
+   - `predicates.py`、`progress.py` 只能 import torch（含子模块）、math 和 `vpmkit.api`，`progress.py` 另可 `from .predicates import ...`；不能用 `.item()`、`.tolist()`、`.numpy()`、`.cpu()`；不能有 for、while 和推导式；
    - 谓词只经参数访问物体：不能读 `.name`，世界视图也不提供按名字取物体的接口；不读官方字段；
    - 只有 `bindings.py` 能读环境；
    - 候选中所有 `.py` 文件：不许读写文件、起进程、联网，不许用 `exec`、`eval`、`__import__` 和双下划线属性。候选是 agent 写的代码，会在我们的进程里执行；谓词与 progress 已有 import 白名单，这几条主要针对 `bindings.py`。
+   - 落实为：不许用 `open`、`exec`、`eval`、`compile`、`__import__`；不许 import os、sys、io、pathlib、shutil、glob、tempfile、pickle、shelve、subprocess、multiprocessing、threading、socket、urllib、http、requests、importlib、ctypes、builtins；不许出现以双下划线开头和结尾的名字或属性。这些是护栏，不是沙箱。
 4. **运行检查：** 用 GPU、8 个并行环境、3 个随机种子，各走 30 步随机动作（约 744 个状态）。全部谓词实例、各阶段的 progress 和自动机更新都不报错，形状为 `[N]`，没有 NaN 或 Inf。
    - 目的：确认候选在真实环境中、按 Stage2 训练时的方式（批量、GPU）能算出来。并行环境查批量与设备上的错误，多个种子查不同的初始布局，随机动作查运动后的状态（速度类谓词、距离为 0 时的除法等）。
    - teacher 每一步都算全部谓词和所有阶段的 progress，所以随机动作到不了的阶段，代码错误也能查出。
    - 它不检查含义。
+
+每条规则都有错误代码（共 34 个：解析 3、schema 21、AST 5、运行 5），清单在 candidate_api.md 第 9 节。
 
 ### 8.3 第二层：审查 agent
 
@@ -615,6 +642,8 @@ PickCube 试跑用不到这些，扩展到其余 15 个任务时再做。
 | M3 参照候选与第一层 | PickCube 参照候选；第一层四项，运行检查在 GPU 子进程中；`check.sh` | 参照候选通过第一层 | 是 |
 | M4 生成 | 输入包生成程序、harness、第二层审查 | PickCube 试跑：生成一次，从你的终端和从 Claude 这边各启动一次，与参照候选逐项对比 | 是，并调用 DeepSeek |
 | M5 PBRS 奖励包装 | 第 4.6 节 | 单元测试；不训练的冒烟测试 | 是 |
+
+“走通”指 harness 把生成 Stage Graph 的完整流程走完一遍，包括生成和两层检查；候选通过与否都是有用的反馈，暂不考虑候选的性能。
 
 M1–M5 先在 PickCube 上走通，你看过结果后，再扩展到其余 15 个任务：适配层补读数、下载资产（第 9.4 节），定三个被拦下的任务怎么处理（第 6.2 节），然后按第 9.1 节的六组顺序各生成一次（K = 1）。
 
@@ -762,3 +791,28 @@ VPM_idea 中有 27 处与本文不一致，另有 2 处建议补充。修改消�
 - 2026-10-21：在 16 个源文件上模拟删除奖励函数，第 6.2 节补记会被拦下的三个任务（PullCubeTool、TurnFaucet、PushT），第 12 节的待定项随之从 PullCubeTool 一个任务扩为三个。
 - 2026-10-21：你同意第 4.6 节写明 PBRS 包装套在 `ManiSkillVectorEnv` 里面，冒烟测试至少经过一次自动重置。
 - 2026-10-21：你定两件事。一是先在 PickCube 一个任务上走通全流程（包括生成），再扩展到其余 15 个；二是示例改用虚构的典型抓放任务，不取自评测任务，16 个任务都生成、都计入统计，PickCube 的参照候选只作测试样例和试跑的答案。随之修改第 1、2.2、3.2、5、6.1、6.2、6.4、7.6、9.1、9.3、9.4、10.1、10.3、10.4、11（第 14 项）、12、13 节与附录 A。
+- 2026-10-21：写好 candidate_api.md 与示例（`vpmkit/resources/`），随之定下接口细节（讨论经过见 01 §4.12）。修改的地方：
+  - 第 3.2 节：`runtime.debounce` 不写进候选；
+  - 第 3.4 节：签名、合取谓词的 margin、`signed`，以及直接调用谓词时的阈值；
+  - 第 3.5 节：progress 怎样调用谓词；每一步算所有阶段的 progress；守卫全部成立时，最后一个阶段的 progress 取 1；
+  - 第 3.6 节：`bind` 返回字典字面量，以及设想的绑定接口；成对的读数放在世界视图上，即 `w.grasping(g, o)`；
+  - 第 6.3、6.4 节：两份文件已写好；示例的布局，其中多了 `helpers.py`；`near` 量到包围盒；自查结果；
+  - 第 8.2 节：补五项静态检查，AST 限制写成具体清单，每条规则有错误代码；
+  - 第 12 节：PickCube 参照候选的 `near` 写法到 M3 再定。
+
+  你还没有看过：写完后停下来给你看。
+- 2026-10-21：你定“走通”的标准：harness 把生成 Stage Graph 的完整流程（生成和两层检查）走完一遍，候选通过与否都算，暂不考虑候选的性能（第 10.3 节）。
+- 2026-10-21：你定 `near` 的写法和 grasp 的不变量（讨论经过见 01 §4.12 第 1、9 项）：
+  - `near` 量 TCP 到物体中心的距离，阈值是物体的半对角线加 `max_dist`（默认 0.02）。它只要求爪子到了物体附近，怎么抓由 RL 探索；
+  - grasp 加不变量 `near(g, cube)` → reach。
+
+  示例与 candidate_api.md 随之修改。本文改了这些地方：
+  - 第 2.4、3.2 节的例子，grasp 同样加上这条不变量；第 3.2 节写明参照候选的 `near` 照示例写；
+  - 第 5 节第 3 组加上这个例子；
+  - 第 6.4 节的表和自查结果更新；
+  - 第 12 节删去 `near` 写法那条待定项。
+
+  另外，第 8.2 节的 AST 清单删去 `inspect`：它属于 01 §4.10 第 1 项你不采用的那类防御，是我误加的。
+- 2026-10-21：你同意第 8.2 节补的五项静态检查，其中两条照我提的写：阈值与 progress 参数漏声明作第一层的硬错误；`bind` 写成字典字面量（讨论经过见 01 §4.12 第 4 项）。正文不用改。
+- 2026-10-21：你同意两个物体之间的读数放在世界视图上，写作 `w.grasping(g, o)`、`w.contact_force(a, b)`（第 3.6 节；讨论经过见 01 §4.12 第 2 项）。正文不用改。
+- 2026-10-21：你同意最后一个阶段的守卫全部成立时 progress 取 1（第 3.5 节）。你看过 candidate_api.md 与示例，其中定下的全部接口细节都同意（讨论经过见 01 §4.12）；`near` 的写法和 grasp 的不变量按讨论改过（见上）。正文不用改；上面第一条记录中“你还没有看过”一句，到此结束。
