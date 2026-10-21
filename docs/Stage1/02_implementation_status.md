@@ -33,7 +33,7 @@
 ## 4. 重写时要记住的经验
 
 1. **同一进程里第二次创建 GPU 场景，SAPIEN 会崩溃。** 所有用到 GPU 仿真的代码和测试，都要每个环境开一个子进程。
-2. **崩溃文件。** 跑测试时在命令前加 `ulimit -c 0`，并把 `XDG_CACHE_HOME` 指到项目的 `outputs/cache`，避免往 /var/crash 写文件。M2 测试时曾留下 `/var/crash/_usr_lib_python3.8_unittest___init__.py.1018.crash`，在项目以外，没有动它，需要的话请你删除。
+2. **崩溃文件。** 跑测试时在命令前加 `ulimit -c 0`，并把 `XDG_CACHE_HOME` 指到项目的 `outputs/cache`，避免往 /var/crash 写文件。M2 测试时曾留下 `/var/crash/_usr_lib_python3.8_unittest___init__.py.1018.crash`（约 470 MB），2026-10-21 已按你的要求删除。
 3. **`make_env`：** 环境数大于 1 时用 GPU 后端（`physx_cuda`），等于 1 时用 CPU 后端。
 4. **欧拉角：** ManiSkill 的判定用 `matrix_to_euler_angles(quaternion_to_matrix(q), "XYZ")`；旧代码的 `quat_to_euler_xyz` 照此实现，并在集成测试中核对过。
 5. **手臂静止：** `Panda.is_static` 用除两个手指外的关节速度（`qvel[..., :-2]`），取绝对值的最大值；`Actor.is_static` 用线速度和角速度的范数。
