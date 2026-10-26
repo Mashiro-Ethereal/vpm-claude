@@ -1,8 +1,8 @@
-# Stage1 实现现状（2026-10-21）
+# Stage1 实现现状（2026-10-26）
 
 > **用途：** 交接用。说明 `stage1-impl` 分支上的代码现状、重写时要用到的环境事实和经验，以及委托 Codex 的做法。设计结论以 [技术方案](00_technical_plan.md) 为准，本文只记实现。
 >
-> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认），还没有开始。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。
+> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a 已完成、审查通过，待你同意后提交（第 8 节）。
 
 ## 1. 分支与提交
 
@@ -39,6 +39,8 @@
 5. **手臂静止：** `Panda.is_static` 用除两个手指外的关节速度（`qvel[..., :-2]`），取绝对值的最大值；`Actor.is_static` 用线速度和角速度的范数。
 6. **DeepSeek 版 Claude Code：** 从 Claude Code 的进程（以及从这里启动的 Codex）里调用时，会继承外层的 `CLAUDE*`、`ANTHROPIC*` 变量，导致 “Not logged in”。子进程的环境要由代码构造（讨论记录 §4.4）。
 7. **审查 M3a 时改过的一处：** 第一层的子进程原来写死用 0 号卡，改为沿用调用方的 `CUDA_VISIBLE_DEVICES`。
+8. **导入顺序（2026-10-26）：** 直接 `from mani_skill.utils.geometry import rotation_conversions` 会因循环导入报错；先 `import mani_skill.envs` 就没有问题。导入不建场景、不写 `~/.maniskill`。
+9. **隐藏物体的位姿（2026-10-26，读源码）：** GPU 仿真中，`_hidden_objects`（如 PickCube 的 goal_site）在渲染时被挪到很远处；`Actor.pose` 会返回真实位姿，所以适配层一律经 `Actor.pose` 读，不直接读 physx 的缓冲区。
 
 ## 5. 任务说明
 
@@ -64,3 +66,18 @@
 
   跑 ManiSkill 或用 GPU 的任务，加 `--sandbox danger-full-access`，派发前工作区要干净。
 - 任务说明里写明：指定使用的显卡；不装包；不联网（需要调用 DeepSeek 的除外）；不改 ManiSkill 和 conda 环境；不写项目以外的位置。
+
+## 8. 重写的进展（2026-10-26 起）
+
+PickCube 试跑会话按 [05](05_implementation_plan.md) 执行。任务说明在 [briefs/](briefs/)，Codex 的运行记录（任务说明原文、事件流、最终汇报）在 `outputs/stage1/codex/<步骤>/`，不进 git。
+
+| 步骤 | 状态 | 代码 | 测试 |
+| --- | --- | --- | --- |
+| M1a 运行时 | 审查通过，待提交 | `vpmkit/`：`world.py`、`geometry.py`、`predicate.py`、`literal.py`、`automaton.py`、`teacher.py`、`render.py`、`errors.py`、`api.py`，`candidate/` 中的 `schema.py` 与 `modules.py` | `tests/unit/`，68 个，全部通过 |
+
+M1a 的要点：
+- 世界快照 `Snapshot` 是张量的数据类：各对象的 `BodyState`（位姿、速度、尺寸、附加属性，夹爪另有开度与手臂关节速度，预留关节读数）、桌面高度、成对的抓取与接触力读数，以及 `evaluate()` 的字段（`official`）。谓词看到的是只读视图，世界视图拿不到 `official`。快照可以拼接、切片、保存与读取（`torch.save`，读取时 `weights_only=True`）。
+- 谓词调用时没有显式传入的阈值，取当前生效的值：Teacher 在每次调用候选代码时，用 contextvars 设定本 Teacher 的阈值，所以几个参数不同的 Teacher 可以共用一份加载的候选。
+- Teacher 每次调用候选代码后，检查快照中的张量有没有被原地修改（比较 `tensor._version`），被改了就报 `CandidateRuntimeError`；候选的返回值不是 `[N]` 的浮点张量或不在同一设备上，报 `CandidateOutputError`。M3 的运行检查把这两种错误分别报为 `run.error`、`run.output`。
+- 候选的 Python 文件按每次加载一个新的包名导入，`progress.py` 能 `from .predicates import ...`，导入时不写 `__pycache__`。
+- 小问题，不影响使用：取反的文字恰好在 margin = 0 时不成立，默认 progress 给它记 1（照 00 第 3.5 节的公式，只在 margin 正好为 0 时出现）；装饰器允许 `w` 写成仅限位置的参数，比 M1b 的静态规则宽。
