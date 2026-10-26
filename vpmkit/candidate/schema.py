@@ -42,8 +42,8 @@ class Param(_Model):
 
 class StageGraph(_Model):
     task: str
-    objects: dict[Identifier, ObjectDecl]
-    stages: list[Stage]
+    objects: dict[Identifier, ObjectDecl] = Field(min_length=1)
+    stages: list[Stage] = Field(min_length=1)
     official: list[Official]
     params: list[Param] = Field(default_factory=list)
 

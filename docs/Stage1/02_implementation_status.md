@@ -2,7 +2,7 @@
 
 > **用途：** 交接用。说明 `stage1-impl` 分支上的代码现状、重写时要用到的环境事实和经验，以及委托 Codex 的做法。设计结论以 [技术方案](00_technical_plan.md) 为准，本文只记实现。
 >
-> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a 已完成、审查通过，待你同意后提交（第 8 节）。
+> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a 已提交（adcd518）；M1b 已完成、审查通过，待你同意后提交（第 8 节）。
 
 ## 1. 分支与提交
 
@@ -73,7 +73,8 @@ PickCube 试跑会话按 [05](05_implementation_plan.md) 执行。任务说明�
 
 | 步骤 | 状态 | 代码 | 测试 |
 | --- | --- | --- | --- |
-| M1a 运行时 | 审查通过，待提交 | `vpmkit/`：`world.py`、`geometry.py`、`predicate.py`、`literal.py`、`automaton.py`、`teacher.py`、`render.py`、`errors.py`、`api.py`，`candidate/` 中的 `schema.py` 与 `modules.py` | `tests/unit/`，68 个，全部通过 |
+| M1a 运行时 | 已提交（adcd518） | `vpmkit/`：`world.py`、`geometry.py`、`predicate.py`、`literal.py`、`automaton.py`、`teacher.py`、`render.py`、`errors.py`、`api.py`，`candidate/` 中的 `schema.py` 与 `modules.py` | `tests/unit/`，68 个，全部通过 |
+| M1b 静态检查 | 审查通过，待提交 | `vpmkit/candidate/`：`codes.py`、`pyinfo.py`、`report.py`、`static.py`，`load_candidate` | `tests/unit/test_static.py` 与 `tests/fixtures/mutations.py`（119 种改法）；单元测试共 96 个，全部通过 |
 
 M1a 的要点：
 - 世界快照 `Snapshot` 是张量的数据类：各对象的 `BodyState`（位姿、速度、尺寸、附加属性，夹爪另有开度与手臂关节速度，预留关节读数）、桌面高度、成对的抓取与接触力读数，以及 `evaluate()` 的字段（`official`）。谓词看到的是只读视图，世界视图拿不到 `official`。快照可以拼接、切片、保存与读取（`torch.save`，读取时 `weights_only=True`）。
@@ -81,3 +82,8 @@ M1a 的要点：
 - Teacher 每次调用候选代码后，检查快照中的张量有没有被原地修改（比较 `tensor._version`），被改了就报 `CandidateRuntimeError`；候选的返回值不是 `[N]` 的浮点张量或不在同一设备上，报 `CandidateOutputError`。M3 的运行检查把这两种错误分别报为 `run.error`、`run.output`。
 - 候选的 Python 文件按每次加载一个新的包名导入，`progress.py` 能 `from .predicates import ...`，导入时不写 `__pycache__`。
 - 小问题，不影响使用：取反的文字恰好在 margin = 0 时不成立，默认 progress 给它记 1（照 00 第 3.5 节的公式，只在 margin 正好为 0 时出现）；装饰器允许 `w` 写成仅限位置的参数，比 M1b 的静态规则宽。
+
+M1b 的要点：
+- 第一层的前三组（解析、schema 与引用、代码限制）只读 YAML 和 Python 的语法树，不导入、不执行候选代码；谓词的签名、阈值默认值和模板都从语法树读出。后一组不通过就不跑，同一组内报出全部问题。
+- 报告的 Markdown 就是 agent 运行 `./check.sh` 时看到的：首行 “Check report: PASSED/FAILED”，各组状态，再逐条列出错误代码、位置（YAML 路径或文件与行号）和说明。
+- 实现上的取舍（都不改设计）：谓词的导入只认 `from vpmkit.api import ...` 与 `import vpmkit.api`；progress 的 `w`、`o` 可以写成仅限位置的参数；异步函数一律不行；`from __future__ import ...` 会因双下划线被 `ast.unsafe` 拦下。
