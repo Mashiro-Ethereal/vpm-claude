@@ -64,6 +64,38 @@ class FakeTeacher:
 
 
 class PBRSTest(unittest.TestCase):
+    def test_scaled_shaping_and_discounted_telescope(self) -> None:
+        frames = [
+            {"phi": [0.5, 0.4], "success": [False, False],
+             "terminated": [False, False], "truncated": [False, False]},
+            {"phi": [0.7, 0.2], "success": [False, False],
+             "terminated": [False, False], "truncated": [False, False]},
+            {"phi": [0.9, 0.8], "success": [True, False],
+             "terminated": [True, False], "truncated": [False, True]},
+        ]
+        gamma, bonus = 0.99, 10.0
+        with candidate() as c:
+            wrappers = [PBRSWrapper(ScriptedEnv([[0.3, 0.6]], frames), c, gamma, bonus,
+                                    phi_scale=scale, adapter=FakeAdapter(), teacher=FakeTeacher())
+                        for scale in (1.0, 4.0)]
+        for wrapper in wrappers:
+            wrapper.reset()
+        initial = wrappers[1].phi_prev.clone()
+        discounted = torch.zeros(2)
+        for step in range(len(frames)):
+            results = [wrapper.step(torch.zeros(2, 1)) for wrapper in wrappers]
+            base, scaled = [result[-1]["pbrs"] for result in results]
+            for key in ("phi", "phi_prev", "phi_used", "shaping"):
+                torch.testing.assert_close(scaled[key], 4 * base[key], rtol=0, atol=0)
+            torch.testing.assert_close(scaled["phi_teacher"], base["phi_teacher"], rtol=0, atol=0)
+            torch.testing.assert_close(scaled["phi"], 4 * scaled["phi_teacher"], rtol=0, atol=0)
+            for _, reward, _, _, info in results:
+                torch.testing.assert_close(reward, info["pbrs"]["shaping"] + info["success"] * bonus)
+            discounted += gamma ** step * scaled["shaping"]
+        torch.testing.assert_close(scaled["phi_used"], torch.tensor([0.0, 3.2]))
+        torch.testing.assert_close(discounted, gamma ** len(frames) * scaled["phi_used"] - initial,
+                                   rtol=0, atol=1e-6)
+
     def test_success_and_truncation_telescope_with_bonus(self) -> None:
         env = ScriptedEnv([[0.3, 0.6]], [
             {"phi": [0.5, 0.4], "success": [False, False],

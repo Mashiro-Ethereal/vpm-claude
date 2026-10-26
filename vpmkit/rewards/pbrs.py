@@ -24,6 +24,7 @@ class PBRSWrapper(gym.Wrapper):
 
     def __init__(self, env: gym.Env, candidate: Candidate, gamma: float,
                  r_bonus: float, params: Mapping[str, float] | None = None, *,
+                 phi_scale: float = 1.0,
                  adapter: ManiSkillAdapter | None = None,
                  teacher: Teacher | None = None) -> None:
         super().__init__(env)
@@ -31,6 +32,7 @@ class PBRSWrapper(gym.Wrapper):
         self.device = env.unwrapped.device
         self.gamma = gamma
         self.r_bonus = r_bonus
+        self.phi_scale = phi_scale
         if adapter is None:
             from ..adapters.maniskill import ManiSkillAdapter
 
@@ -52,20 +54,22 @@ class PBRSWrapper(gym.Wrapper):
         else:
             self.teacher.reset()
         out = self.teacher.step(self.adapter.snapshot(info), env_mask=env_mask)
-        self.phi_prev = (out["phi"] if env_mask is None
-                         else torch.where(env_mask, out["phi"], self.phi_prev))
+        phi = self.phi_scale * out["phi"]
+        self.phi_prev = (phi if env_mask is None
+                         else torch.where(env_mask, phi, self.phi_prev))
         return obs, info
 
     def step(self, action: Any) -> tuple[Any, Tensor, Tensor, Tensor, dict[str, Any]]:
         obs, _, terminated, truncated, info = self.env.step(action)
         out = self.teacher.step(self.adapter.snapshot(info))
-        phi_next = out["phi"]
+        phi_next = self.phi_scale * out["phi"]
         phi_prev = self.phi_prev
         phi_used = torch.where(terminated, 0.0, phi_next)
         shaping = self.gamma * phi_used - phi_prev
         reward = (shaping + info["success"] * self.r_bonus).to(torch.float32)
         self.phi_prev = phi_next
         info["pbrs"] = {"phi": phi_next, "phi_prev": phi_prev, "phi_used": phi_used,
+                        "phi_teacher": out["phi"],
                         "stage": out["stage"], "shaping": shaping,
                         "elapsed_steps": info["elapsed_steps"].clone()}
         return obs, reward, terminated, truncated, info

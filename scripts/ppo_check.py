@@ -50,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-minibatches", type=int, default=32)
     parser.add_argument("--gamma", type=float, default=defaults["gamma"])
     parser.add_argument("--r-bonus", type=float, default=defaults["r_bonus"])
+    parser.add_argument("--phi-unnormalized", action="store_true")
     parser.add_argument("--gae-lambda", type=float, default=0.9)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--clip-coef", type=float, default=0.2)
@@ -255,7 +256,7 @@ def train(args: argparse.Namespace, envs: Any, stage_names: list[str],
             step_info = infos.get("final_info", infos)
             if stage_names:
                 pbrs = step_info["pbrs"]
-                phi_sum += pbrs["phi"].sum()
+                phi_sum += pbrs["phi_teacher"].sum()
                 shaping_sum += pbrs["shaping"].sum()
                 stage_counts.scatter_add_(0, pbrs["stage"], stage_ones)
             if "final_info" in infos:
@@ -425,6 +426,9 @@ def log_evaluation(wandb: Any, result: dict[str, Any], global_step: int) -> None
 def main() -> None:
     args = parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
+    candidate = load_candidate(args.candidate) if args.reward == "teacher" else None
+    stage_names = [stage.name for stage in candidate.graph.stages] if candidate is not None else []
+    phi_scale = float(len(stage_names)) if args.phi_unnormalized and candidate is not None else 1.0
     config = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
     config.update(
         git_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip(),
@@ -432,7 +436,7 @@ def main() -> None:
         eval_num_envs=args.num_envs, device="cuda", control_mode="pd_joint_delta_pos",
         sim_backend="physx_cuda", obs_mode="state", render_mode=None,
         reward_mode="normalized_dense" if args.reward == "dense" else "sparse",
-        ignore_terminations=False, auto_reset=True,
+        ignore_terminations=False, auto_reset=True, phi_scale=phi_scale,
     )
     (args.out / "config.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     wandb, envs = None, None
@@ -453,13 +457,11 @@ def main() -> None:
         from mani_skill.utils.wrappers.flatten import FlattenActionSpaceWrapper
         from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
 
-        candidate = load_candidate(args.candidate) if args.reward == "teacher" else None
-        stage_names = [stage.name for stage in candidate.graph.stages] if candidate is not None else []
         envs = gym.make(args.env_id, num_envs=args.num_envs, obs_mode="state",
                         control_mode="pd_joint_delta_pos", sim_backend="physx_cuda", render_mode=None,
                         reward_mode=config["reward_mode"])
         if candidate is not None:
-            envs = PBRSWrapper(envs, candidate, args.gamma, args.r_bonus)
+            envs = PBRSWrapper(envs, candidate, args.gamma, args.r_bonus, phi_scale=phi_scale)
         if isinstance(envs.action_space, gym.spaces.Dict):
             envs = FlattenActionSpaceWrapper(envs)
         envs = ManiSkillVectorEnv(envs, args.num_envs, ignore_terminations=False,
