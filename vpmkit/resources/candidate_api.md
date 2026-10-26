@@ -143,9 +143,11 @@ A robot without fingers (a pushing stick) has no `width`, no `max_width`, and no
 | --- | --- | --- |
 | `w.table_z` | [N] | height of the table top |
 | `w.grasping(g, o)` | [N] bool | whether gripper g grasps actor o: ManiSkill's `agent.is_grasping(obj)` with its default arguments (both fingers press on o with at least 0.5 N, within 85° of the closing direction) |
-| `w.contact_force(a, b)` | [N] | magnitude of the contact force between actors a and b (N); for the gripper, the sum over its two fingers |
+| `w.contact_force(a, b)` | [N] | magnitude of the contact force between a and b (N), where each is the gripper or an actor; for the gripper, the sum of the force magnitudes on its two fingers |
 | `w.batch_size` | int | N |
 | `w.device` | | the simulation device |
+
+An actor without collision shapes (listed as "visual only" in `scene_inventory.md`, such as a goal marker) is never grasped and touches nothing: its grasp reading is always false and its contact forces are 0. A site has neither reading: `w.grasping` and `w.contact_force` raise an error for a site.
 
 The world view does not expose the fields returned by `evaluate()`, and it cannot look objects up by name: an object reaches a predicate only as an argument.
 
@@ -267,8 +269,6 @@ A stage without a progress function gets the default: the mean, over its guard l
 
 ## 7. bindings.py
 
-<!-- Planned interface (2026-10-21): check against the M2 adapter, then delete this comment before any input package is built. -->
-
 ```python
 def bind(env, api):
     return {
@@ -280,10 +280,11 @@ def bind(env, api):
 
 - `env` is the unwrapped environment: an instance of the task class in `env_source.py`. `scene_inventory.md` lists its actors and the attribute values that `evaluate()` reads.
 - `bind` ends with `return {...}`: a dict literal whose keys are exactly the keys of `objects`.
-- `api.gripper(**attrs)` binds the robot's gripper (Section 4.2).
-- `api.actor(actor, half_size, **attrs)` binds an actor of the environment. `half_size` is a number, a length-3 sequence or tensor, an [N, 3] tensor (when sizes differ between parallel environments), or a function of `env` that returns one of these.
-- `api.site(pose, half_size=0.0, **attrs)` binds a frame that is not an actor, such as a target point computed by the task. `pose` is a function of `env` that returns an [N, 7] tensor or a ManiSkill `Pose`. A site has zero velocity and cannot be grasped.
-- `attrs` attach task-specific readings: `name=value`, where value is a tensor (broadcast to [N, ...]) or a function of `env` that the adapter calls at every step. Names must not clash with the view fields. Predicates read them as `o.<name>`.
+- `api.gripper(**attrs)` binds the robot's gripper (Section 4.2). Its pose is the TCP, link `panda_hand_tcp`. At most one object is the gripper.
+- `api.actor(actor, half_size, **attrs)` binds an actor of the environment, one of the `env.<attribute>` actors listed in `scene_inventory.md`. `half_size` is a number, a length-3 sequence or tensor, an [N, 3] tensor (when sizes differ between parallel environments), or a function of `env` that returns one of these. An actor without collision shapes can be bound too (Section 4.3).
+- `api.site(pose, half_size=0.0, **attrs)` binds a frame that is not an actor, such as a target point computed by the task. `pose` is a function of `env` that returns an [N, 7] tensor or a ManiSkill `Pose` with N rows. A site has zero velocity, cannot be grasped and has no contact forces.
+- `attrs` attach task-specific readings: `name=value`, where value is a number, a numeric sequence, a tensor, or a function of `env` that the adapter calls at every step. A value whose first dimension is N (or 1) gives one reading per parallel environment; any other value is shared by all environments, so give a shared vector whose length happens to equal N as `[1, ...]`. Names must not clash with the view fields or start with `_`. Predicates read them as `o.<name>`.
+- Functions of `env` are called at every step and must accept `env` as their only argument. An error raised by `bind` or by any binding while it is read is reported as `run.bind` (Section 9.4).
 
 Attaching readings, for a hypothetical box with a slot:
 

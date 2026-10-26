@@ -2,7 +2,7 @@
 
 > **用途：** 交接用。说明 `stage1-impl` 分支上的代码现状、重写时要用到的环境事实和经验，以及委托 Codex 的做法。设计结论以 [技术方案](00_technical_plan.md) 为准，本文只记实现。
 >
-> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a 已提交（adcd518）；M1b 已完成、审查通过，待你同意后提交（第 8 节）。
+> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a、M1b 已提交（adcd518、97bc833）；M2 已提交（第 8 节）。
 
 ## 1. 分支与提交
 
@@ -74,7 +74,8 @@ PickCube 试跑会话按 [05](05_implementation_plan.md) 执行。任务说明�
 | 步骤 | 状态 | 代码 | 测试 |
 | --- | --- | --- | --- |
 | M1a 运行时 | 已提交（adcd518） | `vpmkit/`：`world.py`、`geometry.py`、`predicate.py`、`literal.py`、`automaton.py`、`teacher.py`、`render.py`、`errors.py`、`api.py`，`candidate/` 中的 `schema.py` 与 `modules.py` | `tests/unit/`，68 个，全部通过 |
-| M1b 静态检查 | 审查通过，待提交 | `vpmkit/candidate/`：`codes.py`、`pyinfo.py`、`report.py`、`static.py`，`load_candidate` | `tests/unit/test_static.py` 与 `tests/fixtures/mutations.py`（119 种改法）；单元测试共 96 个，全部通过 |
+| M1b 静态检查 | 已提交（97bc833） | `vpmkit/candidate/`：`codes.py`、`pyinfo.py`、`report.py`、`static.py`，`load_candidate` | `tests/unit/test_static.py` 与 `tests/fixtures/mutations.py`（119 种改法）；单元测试共 96 个，全部通过 |
+| M2 ManiSkill 适配层 | 已提交 | `vpmkit/adapters/maniskill/`：`env.py`、`binding.py`、`adapter.py`、`inventory.py`、`helpers_table.py`；`errors.py` 加 `BindingError` | 单元测试共 110 个；`tests/integration/` 4 个（GPU，`VPM_INTEGRATION=1`），全部通过 |
 
 M1a 的要点：
 - 世界快照 `Snapshot` 是张量的数据类：各对象的 `BodyState`（位姿、速度、尺寸、附加属性，夹爪另有开度与手臂关节速度，预留关节读数）、桌面高度、成对的抓取与接触力读数，以及 `evaluate()` 的字段（`official`）。谓词看到的是只读视图，世界视图拿不到 `official`。快照可以拼接、切片、保存与读取（`torch.save`，读取时 `weights_only=True`）。
@@ -87,3 +88,15 @@ M1b 的要点：
 - 第一层的前三组（解析、schema 与引用、代码限制）只读 YAML 和 Python 的语法树，不导入、不执行候选代码；谓词的签名、阈值默认值和模板都从语法树读出。后一组不通过就不跑，同一组内报出全部问题。
 - 报告的 Markdown 就是 agent 运行 `./check.sh` 时看到的：首行 “Check report: PASSED/FAILED”，各组状态，再逐条列出错误代码、位置（YAML 路径或文件与行号）和说明。
 - 实现上的取舍（都不改设计）：谓词的导入只认 `from vpmkit.api import ...` 与 `import vpmkit.api`；progress 的 `w`、`o` 可以写成仅限位置的参数；异步函数一律不行；`from __future__ import ...` 会因双下划线被 `ast.unsafe` 拦下。
+
+M2 的要点：
+- `make_env(env_id, num_envs)`：N > 1 用 `physx_cuda`，N = 1 用 `physx_cpu`；默认 `obs_mode="state"`、`reward_mode="sparse"`。
+- `ManiSkillAdapter(env, bind)` 在构造时调用一次 `bind(env.unwrapped, api)`；`snapshot(info=None)` 每步读一份快照，所有张量都复制出来，不与仿真器的缓冲区共用内存。夹爪：位姿取 `agent.tcp`（`panda_hand_tcp`），开度是两个手指关节位置之和，最大开度是它们上限之和，`arm_qvel` 是去掉两个手指的关节速度。actor 的位姿一律经 `Actor.pose` 读。只支持 Panda 一族（panda、panda_wristcam），其他机器人报 `NotImplementedError`。
+- 快照中 `evaluate()` 的字段一律转成 float32（成功信号为 0 或 1）；`grasping` 仍是布尔。
+- 绑定或读数出错报 `BindingError`（M3 的运行检查报为 `run.bind`）。
+- 场景清单从运行中的环境生成，格式同示例；PickCube 的 `goal_site` 标为 visual only，半尺寸从显示用的网格读出（[0.025, 0.025, 0.025]）；`evaluate()` 读到的属性只有 `self.goal_thresh` = 0.025。
+- 集成测试的跑法：
+
+  ```bash
+  cd /home/zxh/projects_dir/vpm-claude && ulimit -c 0 && VPM_INTEGRATION=1 TMPDIR=$PWD/outputs/tmp XDG_CACHE_HOME=$PWD/outputs/cache MS_ASSET_DIR=$PWD/outputs/maniskill CUDA_VISIBLE_DEVICES=1 /home/zxh/anaconda3/envs/vpm-mani/bin/python -m unittest discover -s tests/integration -t . -v
+  ```

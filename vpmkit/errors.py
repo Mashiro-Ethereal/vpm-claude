@@ -10,6 +10,14 @@ class CandidateError(Exception):
     """Base class for candidate validation and execution errors."""
 
 
+class BindingError(CandidateError):
+    """A candidate binding could not be constructed or read."""
+
+    def __init__(self, key: str, message: str) -> None:
+        self.key = key
+        super().__init__(f"binding {key!r}: {message}")
+
+
 class CandidateCheckError(CandidateError):
     def __init__(self, report: "Report") -> None:
         self.report = report
