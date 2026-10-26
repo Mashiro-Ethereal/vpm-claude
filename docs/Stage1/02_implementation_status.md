@@ -2,7 +2,7 @@
 
 > **用途：** 交接用。说明 `stage1-impl` 分支上的代码现状、重写时要用到的环境事实和经验，以及委托 Codex 的做法。设计结论以 [技术方案](00_technical_plan.md) 为准，本文只记实现。
 >
-> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a、M1b 已提交（adcd518、97bc833）；M2 已提交（c423943）；M3 已提交（96ad2d5），参照候选你已看过同意；TASK.md 的模板已提交（5a7691d）；M4a 已提交（c1a3580）；M4b 已提交（077ac58）；PickCube 试跑已走通，见 [06](06_pickcube_trial.md)；M5 待做（第 8 节）。
+> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a、M1b 已提交（adcd518、97bc833）；M2 已提交（c423943）；M3 已提交（96ad2d5），参照候选你已看过同意；TASK.md 的模板已提交（5a7691d）；M4a 已提交（c1a3580）；M4b 已提交（077ac58）；PickCube 试跑已走通，见 [06](06_pickcube_trial.md)；M5 已提交；PickCube 试跑的 M1–M5 全部完成（第 8 节）。
 
 ## 1. 分支与提交
 
@@ -79,6 +79,7 @@ PickCube 试跑会话按 [05](05_implementation_plan.md) 执行。任务说明�
 | M3 参照候选与第一层 | 已提交（96ad2d5） | `candidates/reference/PickCube-v1/`；`vpmkit/validate/`：`run_worker.py`、`layer1.py`、`check_sh.py`；`vpmkit/resources/check.sh.template`；`scripts/check_candidate.py` | 单元测试共 123 个；集成测试共 9 个，全部通过 |
 | M4a 输入包 | 已提交（c1a3580） | `vpmkit/package/`：`strip.py`、`helpers.py`、`build.py`；`scripts/build_packages.py`；模板 `vpmkit/resources/TASK_template.md`（我写） | 单元测试共 135 个；集成测试共 10 个，全部通过 |
 | M4b harness 与第二层 | 已提交（077ac58） | `vpmkit/harness/`：`env.py`、`rundir.py`、`backends.py`、`review.py`、`run.py`；`configs/default.yaml`；`scripts/run_generation.py`；提示词 `vpmkit/resources/review_prompt.md`（我写） | 单元测试共 166 个；集成测试共 15 个（脚本后端，不调用 DeepSeek），全部通过 |
+| M5 PBRS 奖励包装 | 已提交 | `vpmkit/rewards/pbrs.py`；`Teacher.step` 加 `env_mask`；`configs/default.yaml` 加 `pbrs`；`scripts/pbrs_smoke.py` | 单元测试共 171 个；集成测试共 16 个，全部通过 |
 
 M1a 的要点：
 - 世界快照 `Snapshot` 是张量的数据类：各对象的 `BodyState`（位姿、速度、尺寸、附加属性，夹爪另有开度与手臂关节速度，预留关节读数）、桌面高度、成对的抓取与接触力读数，以及 `evaluate()` 的字段（`official`）。谓词看到的是只读视图，世界视图拿不到 `official`。快照可以拼接、切片、保存与读取（`torch.save`，读取时 `weights_only=True`）。
@@ -124,3 +125,10 @@ M4b 的要点：
 - stream-json 与 stderr 保存后，把名字像密钥的字段值（如 init 事件的 `apiKeySource`）抹成 `[REDACTED]`，token 用量的计数保留。
 
 PickCube 试跑（2026-10-26）：`scripts/run_generation.py --env PickCube-v1 --gpu 1`，运行目录 `outputs/stage1/runs/PickCube-v1/20261026-184803/`，第 1 轮通过，约 15 分钟（生成约 2.7 分钟，审查约 11.9 分钟）。结果与对比见 [06](06_pickcube_trial.md)。试跑时确认的事实：DeepSeek 子进程由代码构造环境后登录正常；`dontAsk` 模式下工作区内的只读 Bash 命令会被自动放行，读工作区以外的路径都被拒绝（06 第 4.1 节）；审查会话用了时间上限的八成（06 第 4.2 节）。
+
+M5 的要点：
+- 用法：`ManiSkillVectorEnv(PBRSWrapper(make_env(env_id, N), candidate, gamma, r_bonus), auto_reset=True, ignore_terminations=False)`。包装套在 `ManiSkillVectorEnv` 里面，与官方 PPO 的 `FlattenActionSpaceWrapper` 同一层；环境自己的奖励不用。
+- 每步：读快照，Teacher 更新一次，奖励 = γΦ(s′) − Φ(s) + 成功 × r_bonus；成功终止时 Φ(s′) 取 0，截断时照常用 Φ(s′)。`info["pbrs"]` 中记下 Φ、上一步的 Φ、阶段、塑形项与算 Φ 时的 `elapsed_steps`。
+- 部分重置（`options["env_idx"]`）时，Teacher 只重置并更新被重置的环境，它们的 Φ(s) 换成新回合初始状态的值。
+- 开销：N = 1024 时仿真每步约 40.9 ms，读快照加 Teacher 每步约 5.0 ms。
+- Stage2 要改的：ManiSkill 官方 PPO 对成功终止也自举，用本包装时要改成只对截断自举（00 第 4.6 节）。

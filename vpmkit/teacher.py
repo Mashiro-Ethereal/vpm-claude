@@ -228,11 +228,21 @@ class Teacher:
                 "phi": (stage + stage_progress) / self.num_stages,
                 "pred": pred, "margin": margins, "guidance": guidance}
 
-    def step(self, snapshot: Snapshot) -> dict[str, Tensor]:
+    def step(self, snapshot: Snapshot, env_mask: Tensor | None = None) -> dict[str, Tensor]:
+        """Update selected environments and return outputs for the full batch."""
         self._check_snapshot(snapshot, check_batch=True)
+        if env_mask is not None and (not isinstance(env_mask, Tensor)
+                                     or env_mask.dtype != torch.bool
+                                     or env_mask.shape != (self.num_envs,)
+                                     or env_mask.device != self.device):
+            raise ValueError(f"env_mask must be a BoolTensor with shape ({self.num_envs},) on {self.device}")
         margins = self.compute_margins(snapshot)
         lit_true = self._literal_truth(margins)
-        self._stage, self._counters = self._automaton.step(self._stage, self._counters, lit_true, self.debounce)
+        stage, counters = self._automaton.step(self._stage, self._counters, lit_true, self.debounce)
+        if env_mask is not None:
+            stage = torch.where(env_mask, stage, self._stage)
+            counters = torch.where(env_mask[:, None], counters, self._counters)
+        self._stage, self._counters = stage, counters
         progress = self.compute_progress(snapshot, margins)
         return self._output(self._stage, margins, lit_true, progress)
 

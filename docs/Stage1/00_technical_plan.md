@@ -279,11 +279,13 @@ def near(w, g, o, max_dist=0.02):    # f(w, *对象, **阈值) -> margin [N]
 ### 4.6 PBRS 奖励包装
 
 PBRS 奖励包装属于 Stage1，是交给 Stage2 的接口：
-- 奖励为 R = γΦ(s′) − Φ(s) + I_success(s′) · r_bonus，γ 与 RL 算法的折扣因子相同（§3.3 第 1 条）；
+- 奖励为 R = γΦ(s′) − Φ(s) + I_success(s′) · r_bonus，γ 与 RL 算法的折扣因子相同（§3.3 第 1 条；ManiSkill 官方 PPO 为 0.8）；r_bonus 取 1（2026-10-26 你定，与 Φ 的量程相当，也与 ManiSkill normalized_dense 奖励中成功那一步的 1 一致；Stage2 可以再调）。两者写在 `configs/default.yaml` 的 `pbrs` 一节；
 - 成功终止时，终止状态的势值取 0；超时截断不当作终止，用 critic 对最后一个状态的价值估计自举（§3.3 第 2 条）；
 - 势值每一步只算一次并复用，整条轨迹上的塑形项才能逐项相消（§3.3 第 4 条）；
 - 包装套在 `ManiSkillVectorEnv` 里面：先包住 ManiSkill 环境，再套 `ManiSkillVectorEnv`，与官方 PPO 的 `FlattenActionSpaceWrapper` 同一层。【事实，读 vpm-mani 中的源码】`ManiSkillVectorEnv.step` 发现回合结束，会当场重置这些环境，返回的是重置后的状态，结束前的观测另放在 `infos["final_observation"]`。包装套在它外面的话，截断那一步的 Φ(s′) 会算在重置后的状态上；
 - Stage1 只做单元测试和不训练的冒烟测试（随机动作跑几个回合，至少经过一次自动重置，检查形状与逐项相消），PPO 训练归 Stage2。
+- 【事实，2026-10-26 读 vpm-mani 中的源码】ManiSkill 官方 PPO（`examples/baselines/ppo/ppo.py` 第 331 行）对所有结束的回合，包括成功终止的，都用 critic 对最后一个状态的估值自举。用本包装训练时，Stage2 要改成只对截断自举，成功终止处取 0，否则与上面“成功终止时势值取 0”的约定不符。
+- 实现（M5，2026-10-26）：`vpmkit/rewards/pbrs.py` 的 `PBRSWrapper`；部分重置时 Teacher 只更新被重置的环境（`Teacher.step(snapshot, env_mask)`）。冒烟测试 `scripts/pbrs_smoke.py`。
 
 出处：01 §2.2–§2.4、§4.1 第 3–7 条、§4.7。
 
@@ -743,7 +745,7 @@ M1–M5 先在 PickCube 上走通，你看过结果后，再扩展到其余 15 �
 - `is_grasping` 按接触力判定，在图像中看不见，作为 Stage3 的标签不易学；v1 先允许用，合并词表时再处理。
 
 **【假设】要实测的：**
-- teacher 的批量计算不会成为训练的瓶颈。
+- teacher 的批量计算不会成为训练的瓶颈。【事实，2026-10-26 M5 在 PickCube 上测】N = 1024 时，仿真每步约 40.9 ms，读快照加 Teacher 每步约 5.0 ms（约为仿真的 12%）；谓词多的任务要再看。
 - 提供几何工具，能减少 DeepSeek 在四元数、坐标变换上的低级错误。
 - 一个抓放示例够用：agent 不会把抓取的结构照搬到推、拉、滚类任务上（第 6.4 节）。
 - 短训练能分辨做法的好坏（E-S3）。
@@ -829,3 +831,4 @@ VPM_idea 中有 27 处与本文不一致，另有 2 处建议补充。修改消�
 - 2026-10-26：你定生成与审查会话的取值：生成 `--max-turns` 80、每轮 40 分钟，审查 `--max-turns` 40、每次 15 分钟（第 7.3、8.4 节；讨论经过见 01 §4.17）。M4b 写好 harness 后的实现细节（超时时结束整个进程组、记录中抹掉形似密钥的字段值、审查结果的宽松解析、上一轮的错误保留到下一次审查）记在 02，不改本文的做法。
 - 2026-10-26：你决定 PickCube 试跑只由 Claude 这边启动一次，取消从你的终端启动的那一次，遇到问题再解决（第 7.6、10.3 节；讨论经过见 01 §4.18）。
 - 2026-10-26：PickCube 试跑走通（对比报告见 [06](06_pickcube_trial.md)）。订正第 7.7 节一句：`dontAsk` 模式下工作区内的只读 Bash 命令会被自动放行；10-21 的实测记录显示，读工作区以外的路径（含 Bash 的 `cat`、`ls ..`）都被拒绝，隔离成立。
+- 2026-10-26：你定成功奖励 r_bonus 取 1（第 4.6 节；讨论经过见 01 §4.19）。M5 写好 PBRS 包装；第 4.6 节补记 ManiSkill 官方 PPO 对成功终止也自举、Stage2 要改的事实，第 12 节的【假设】补记 M5 测得的开销。

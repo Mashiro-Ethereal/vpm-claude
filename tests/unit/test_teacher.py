@@ -194,6 +194,35 @@ class TeacherTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 teacher.reset(**kwargs)
 
+    def test_masked_step_advances_only_selected_environments(self) -> None:
+        teacher = Teacher(self.example, 3)
+        output = teacher.step(snapshot(3), env_mask=torch.tensor([True, False, True]))
+        self.assertEqual(output["stage"].tolist(), [1, 0, 1])
+        torch.testing.assert_close(output["phi"], torch.tensor([0.25, (1 - 0.04 / 0.3) / 4, 0.25]))
+        self.assertEqual(output["guidance"][:, :2].tolist(), [[False, True], [False, False], [False, True]])
+        self.assertEqual(output["margin"].shape, (3, 4))
+
+    def test_masked_step_preserves_invariant_counters(self) -> None:
+        teacher = Teacher(self.example, 3, params={"runtime.debounce": 2})
+        teacher.reset(stage=2)
+        slip = snapshot(3, tcp=(0.3, 0, 0.02))
+        teacher.step(slip, env_mask=torch.tensor([True, False, True]))
+        self.assertEqual(teacher._counters.tolist(), [[0, 1, 0], [0, 0, 0], [0, 1, 0]])
+        output = teacher.step(slip, env_mask=torch.tensor([False, True, True]))
+        self.assertEqual(output["stage"].tolist(), [2, 2, 0])
+        self.assertEqual(teacher._counters.tolist(), [[0, 1, 0], [0, 1, 0], [0, 0, 0]])
+        output = teacher.step(snapshot(3, grasp=True), env_mask=torch.zeros(3, dtype=torch.bool))
+        self.assertEqual(output["stage"].tolist(), [2, 2, 0])
+        self.assertEqual(teacher._counters.tolist(), [[0, 1, 0], [0, 1, 0], [0, 0, 0]])
+        self.assertTrue(output["pred"][:, 1].all())
+
+    def test_step_requires_boolean_batch_mask_on_teacher_device(self) -> None:
+        teacher = Teacher(self.example, 2)
+        for mask in ([True, False], torch.tensor([1, 0]), torch.ones(2, 1, dtype=torch.bool),
+                     torch.ones(1, dtype=torch.bool), torch.ones(2, dtype=torch.bool, device="meta")):
+            with self.subTest(mask=mask), self.assertRaisesRegex(ValueError, "env_mask"):
+                teacher.step(snapshot(2), env_mask=mask)
+
     def test_batched_matches_six_individual_teachers(self) -> None:
         params = {"runtime.debounce": 2, "near.max_dist": 0.01}
         batched = Teacher(self.example, 6, params=params)

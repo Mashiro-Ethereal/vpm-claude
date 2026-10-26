@@ -8,6 +8,9 @@ max_rounds: 4
 harness_retries: 2
 k: 1
 gpu: 1
+pbrs:
+  gamma: 0.8
+  r_bonus: 1.0
 paths:
   packages: outputs/stage1/packages
   runs: outputs/stage1/runs
