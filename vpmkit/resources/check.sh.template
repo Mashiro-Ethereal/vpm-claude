@@ -1,0 +1,15 @@
+#!/bin/sh
+if [ "$#" -ne 0 ]; then
+    echo "check.sh takes no arguments" >&2
+    exit 2
+fi
+set -eu
+ulimit -c 0
+repo=@REPO_ROOT@
+export XDG_CACHE_HOME="$repo/outputs/cache"
+export MS_ASSET_DIR="$repo/outputs/maniskill"
+export TMPDIR="$repo/outputs/tmp"
+export PYTHONPATH="$repo"
+mkdir -p "$TMPDIR"
+workspace=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec @VPM_PYTHON@ "$repo/scripts/check_candidate.py" --env @ENV_ID@ "$workspace/candidate"

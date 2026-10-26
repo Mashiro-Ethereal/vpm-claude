@@ -1,6 +1,6 @@
 """Serializable, actionable candidate check results."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import json
 
 from .codes import CODES
@@ -25,6 +25,7 @@ class Report:
     candidate: str
     groups: dict[str, str]
     problems: list[Problem]
+    timing: dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if set(self.groups) != set(GROUPS):
@@ -40,15 +41,22 @@ class Report:
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, ensure_ascii=False)
 
+    @property
+    def layer1_passed(self) -> bool:
+        return all(self.groups[group] == "passed" for group in GROUPS)
+
     @classmethod
     def from_json(cls, text: str) -> "Report":
         data = json.loads(text)
         return cls(candidate=data["candidate"], groups=data["groups"],
-                   problems=[Problem(**problem) for problem in data["problems"]])
+                   problems=[Problem(**problem) for problem in data["problems"]],
+                   timing=data.get("timing", {}))
 
     def to_markdown(self) -> str:
-        lines = [f"Check report: {'PASSED' if self.passed else 'FAILED'}", "",
+        lines = [f"Check report: {'PASSED' if self.layer1_passed else 'FAILED'}", "",
                  *(f"- {group}: {self.groups[group]}" for group in GROUPS)]
+        if "total_seconds" in self.timing:
+            lines.extend(["", f"Wall time: {self.timing['total_seconds']:.2f} s"])
         if self.problems:
             lines.append("")
             lines.extend(f"{i}. `{p.code}` at {p.location}: {p.message}"

@@ -263,7 +263,13 @@ class ReportTest(unittest.TestCase):
             self.assertIn(f"{i}. `{problem.code}` at {problem.location}: {problem.message}", markdown)
         report = check_static(EXAMPLE)
         self.assertEqual(Report.from_json(report.to_json()), report)
+        self.assertEqual(report.to_markdown().splitlines()[0], "Check report: FAILED")
+        self.assertFalse(report.layer1_passed)
+        report.groups["run"] = "passed"
+        report.timing["total_seconds"] = 1.25
+        self.assertTrue(report.layer1_passed)
         self.assertEqual(report.to_markdown().splitlines()[0], "Check report: PASSED")
+        self.assertEqual(Report.from_json(report.to_json()), report)
 
     def test_passed_requires_all_static_groups_and_no_failure(self) -> None:
         groups = {"parse": "passed", "schema": "passed", "ast": "passed", "run": "skipped"}
@@ -271,6 +277,7 @@ class ReportTest(unittest.TestCase):
         self.assertTrue(Report("candidate", {**groups, "run": "passed"}, []).passed)
         for group in groups:
             self.assertFalse(Report("candidate", {**groups, group: "failed"}, []).passed)
+            self.assertFalse(Report("candidate", {**groups, group: "failed"}, []).layer1_passed)
         for group in ("parse", "schema", "ast"):
             self.assertFalse(Report("candidate", {**groups, group: "skipped"}, []).passed)
 

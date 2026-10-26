@@ -2,7 +2,7 @@
 
 > **用途：** 交接用。说明 `stage1-impl` 分支上的代码现状、重写时要用到的环境事实和经验，以及委托 Codex 的做法。设计结论以 [技术方案](00_technical_plan.md) 为准，本文只记实现。
 >
-> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a、M1b 已提交（adcd518、97bc833）；M2 已提交（第 8 节）。
+> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a、M1b 已提交（adcd518、97bc833）；M2 已提交（c423943）；M3 已提交，参照候选你已看过同意（第 8 节）。
 
 ## 1. 分支与提交
 
@@ -75,7 +75,8 @@ PickCube 试跑会话按 [05](05_implementation_plan.md) 执行。任务说明�
 | --- | --- | --- | --- |
 | M1a 运行时 | 已提交（adcd518） | `vpmkit/`：`world.py`、`geometry.py`、`predicate.py`、`literal.py`、`automaton.py`、`teacher.py`、`render.py`、`errors.py`、`api.py`，`candidate/` 中的 `schema.py` 与 `modules.py` | `tests/unit/`，68 个，全部通过 |
 | M1b 静态检查 | 已提交（97bc833） | `vpmkit/candidate/`：`codes.py`、`pyinfo.py`、`report.py`、`static.py`，`load_candidate` | `tests/unit/test_static.py` 与 `tests/fixtures/mutations.py`（119 种改法）；单元测试共 96 个，全部通过 |
-| M2 ManiSkill 适配层 | 已提交 | `vpmkit/adapters/maniskill/`：`env.py`、`binding.py`、`adapter.py`、`inventory.py`、`helpers_table.py`；`errors.py` 加 `BindingError` | 单元测试共 110 个；`tests/integration/` 4 个（GPU，`VPM_INTEGRATION=1`），全部通过 |
+| M2 ManiSkill 适配层 | 已提交（c423943） | `vpmkit/adapters/maniskill/`：`env.py`、`binding.py`、`adapter.py`、`inventory.py`、`helpers_table.py`；`errors.py` 加 `BindingError` | 单元测试共 110 个；`tests/integration/` 4 个（GPU，`VPM_INTEGRATION=1`），全部通过 |
+| M3 参照候选与第一层 | 已提交 | `candidates/reference/PickCube-v1/`；`vpmkit/validate/`：`run_worker.py`、`layer1.py`、`check_sh.py`；`vpmkit/resources/check.sh.template`；`scripts/check_candidate.py` | 单元测试共 123 个；集成测试共 9 个，全部通过 |
 
 M1a 的要点：
 - 世界快照 `Snapshot` 是张量的数据类：各对象的 `BodyState`（位姿、速度、尺寸、附加属性，夹爪另有开度与手臂关节速度，预留关节读数）、桌面高度、成对的抓取与接触力读数，以及 `evaluate()` 的字段（`official`）。谓词看到的是只读视图，世界视图拿不到 `official`。快照可以拼接、切片、保存与读取（`torch.save`，读取时 `weights_only=True`）。
@@ -100,3 +101,9 @@ M2 的要点：
   ```bash
   cd /home/zxh/projects_dir/vpm-claude && ulimit -c 0 && VPM_INTEGRATION=1 TMPDIR=$PWD/outputs/tmp XDG_CACHE_HOME=$PWD/outputs/cache MS_ASSET_DIR=$PWD/outputs/maniskill CUDA_VISIBLE_DEVICES=1 /home/zxh/anaconda3/envs/vpm-mani/bin/python -m unittest discover -s tests/integration -t . -v
   ```
+
+M3 的要点：
+- 第一层的入口：`run_layer1(candidate_dir, env_id)`（Python）或 `scripts/check_candidate.py --env <env_id> <candidate_dir>`（命令行，退出码 0 通过、1 不通过、2 出错）。运行检查在子进程中进行，沿用调用方的 `CUDA_VISIBLE_DEVICES`。
+- `check.sh` 由 `write_check_sh(workspace, env_id)` 按模板写出，写死仓库与 Python 的绝对路径，自己设好 `XDG_CACHE_HOME`、`MS_ASSET_DIR`、`TMPDIR`、`PYTHONPATH` 并关掉崩溃文件，所以在 harness 构造的最小环境里也能跑。带参数时直接拒绝。
+- 用时：PickCube 参照候选一次完整的第一层冷启动约 12–13 秒，其中运行检查约 9 秒。
+- agent 看到的失败报告，每条带错误代码、位置（候选文件与行号，算出 NaN 时是函数名）、异常类型与消息、出错的函数与实例、种子与步数，以及候选文件里的 traceback 行。

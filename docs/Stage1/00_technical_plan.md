@@ -112,10 +112,10 @@
 - **防闪烁参数** `runtime.debounce`（即 m）保留，默认为 1。它是运行时的设置，不写进候选；参数覆盖时用这个名字（M1 的测试用它设 m = 2）。
 - 字段、类型与写法的细节见接口说明 `vpmkit/resources/candidate_api.md`（第 6.3 节）。
 
-PickCube 参照候选的 `stage_graph.yaml` 大致如下（M3 照此写）。`grasped`、`at_goal`、`arm_static` 照官方判定写，阈值固定，所以 `params` 中只有 `near` 的阈值。`near` 照示例的写法：TCP 到方块中心的距离 ≤ 方块的半对角线 + `max_dist`，只要求爪子到了方块附近（第 6.4 节）；grasp 保持 `near(g, cube)`，爪子离开方块附近就回到 reach。
+PickCube 参照候选在 `candidates/reference/PickCube-v1/`（M3 写好，2026-10-26 你看过同意），它的 `stage_graph.yaml` 如下。`grasped`、`at_goal`、`arm_static` 照官方判定写，阈值固定，不放进 `params`；`params` 中是 `near` 的阈值和 reach 的 progress 尺度 `progress.reach.d0`（reach 照示例自写 progress，carry、settle 用默认 progress）。`near` 照示例的写法：TCP 到方块中心的距离 ≤ 方块的半对角线 + `max_dist`，只要求爪子到了方块附近（第 6.4 节）；grasp 保持 `near(g, cube)`，爪子离开方块附近就回到 reach。
 
 ```yaml
-task: Pick up the red cube and move it to the goal position
+task: Pick up the red cube and move it to the goal position.
 objects:
   g:    {name: the gripper}
   cube: {name: the red cube}
@@ -138,7 +138,8 @@ official:
   - {literals: ["arm_static(g)"], key: is_robot_static}
   - {literals: ["arm_static(g)", "at_goal(cube, goal)"], key: success}
 params:
-  - {name: near.max_dist, default: 0.02, range: [0.005, 0.05]}
+  - {name: near.max_dist, default: 0.02, range: [0.0, 0.05]}
+  - {name: progress.reach.d0, default: 0.3, range: [0.1, 0.6]}
 ```
 
 PickCube 的 success 是“方块到达目标，且手臂静止”。最后一个阶段 settle 的守卫 `arm_static(g)` 加上不变量 `at_goal(cube, goal)`，正好等于它。
@@ -818,3 +819,4 @@ VPM_idea 中有 27 处与本文不一致，另有 2 处建议补充。修改消�
 - 2026-10-21：你同意两个物体之间的读数放在世界视图上，写作 `w.grasping(g, o)`、`w.contact_force(a, b)`（第 3.6 节；讨论经过见 01 §4.12 第 2 项）。正文不用改。
 - 2026-10-21：你同意最后一个阶段的守卫全部成立时 progress 取 1（第 3.5 节）。你看过 candidate_api.md 与示例，其中定下的全部接口细节都同意（讨论经过见 01 §4.12）；`near` 的写法和 grasp 的不变量按讨论改过（见上）。正文不用改；上面第一条记录中“你还没有看过”一句，到此结束。
 - 2026-10-26：M2（ManiSkill 适配层）实现后，第 3.6 节的绑定接口照实际实现改写，加一条：没有碰撞体的 actor 抓取读数恒为假、接触力恒为 0；site 没有这两项读数。candidate_api.md 第 4.3、7 节随之补全（夹爪接触力写明是两个手指受力大小之和；附加属性的首维为 N 或 1 时按环境区分，否则所有环境共用），删去第 7 节开头的提醒注释；第 6.3、6.4 节随之改。讨论经过见 01 §4.13；同日你同意。
+- 2026-10-26：M3 写好 PickCube 参照候选（`candidates/reference/PickCube-v1/`），你看过同意。第 3.2 节的 YAML 改成与它一致：reach 照示例自写 progress，`params` 加 `progress.reach.d0`（默认 0.3、范围 [0.1, 0.6]）；`near.max_dist` 的范围改为 [0, 0.05]，这是 01 §4.12 定的值，原文漏改（讨论经过见 01 §4.14）。

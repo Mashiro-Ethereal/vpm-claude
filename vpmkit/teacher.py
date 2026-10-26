@@ -11,7 +11,7 @@ from .candidate import Candidate
 from .errors import CandidateOutputError, CandidateRuntimeError
 from .literal import Literal, parse_literal
 from .predicate import active_thresholds
-from .world import Snapshot, make_views
+from .world import Objects, Snapshot, World, make_views
 
 
 class Teacher:
@@ -165,20 +165,25 @@ class Teacher:
     def _literal_truth(self, margins: Tensor) -> Tensor:
         return (margins[:, self._literal_columns] >= 0) ^ self._negated
 
+    def _progress_scores(self, margins: Tensor) -> Tensor:
+        lit_true = self._literal_truth(margins)
+        lit_margin = margins[:, self._literal_columns] * torch.where(self._negated, -1, 1)
+        return torch.where(lit_true, 1.0, (1 + lit_margin / self._scales).clamp(0, 1))
+
+    def _stage_progress(self, snapshot: Snapshot, k: int, scores: Tensor,
+                        world: World, objects: Objects) -> Tensor:
+        stage = self.stage_names[k]
+        if stage in self.candidate.progress:
+            return self._call(snapshot, self.candidate.progress[stage], stage,
+                              world, objects, **self._progress_params[stage])
+        return scores[:, self._guard_slots[k]].mean(-1)
+
     def compute_progress(self, snapshot: Snapshot, margins: Tensor) -> Tensor:
         self._check_snapshot(snapshot)
         world, _, objects = make_views(snapshot)
-        lit_true = self._literal_truth(margins)
-        lit_margin = margins[:, self._literal_columns] * torch.where(self._negated, -1, 1)
-        scores = torch.where(lit_true, 1.0, (1 + lit_margin / self._scales).clamp(0, 1))
-        progress = []
-        for k, stage in enumerate(self.stage_names):
-            if stage in self.candidate.progress:
-                value = self._call(snapshot, self.candidate.progress[stage], stage,
-                                   world, objects, **self._progress_params[stage])
-            else:
-                value = scores[:, self._guard_slots[k]].mean(-1)
-            progress.append(value)
+        scores = self._progress_scores(margins)
+        progress = [self._stage_progress(snapshot, k, scores, world, objects)
+                    for k in range(self.num_stages)]
         return torch.stack(progress, dim=-1)
 
     def _stage_values(self, stage: int | Tensor | None, count: int) -> Tensor:

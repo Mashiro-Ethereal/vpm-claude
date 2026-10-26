@@ -1,0 +1,28 @@
+task: Pick up the red cube and move it to the goal position.
+objects:
+  g:    {name: the gripper}
+  cube: {name: the red cube}
+  goal: {name: the goal position}
+stages:
+  - name: reach
+    exit: ["near(g, cube)"]
+  - name: grasp
+    exit: ["grasped(g, cube)"]
+    invariants:
+      - {literal: "near(g, cube)", regress_to: reach}
+  - name: carry
+    exit: ["at_goal(cube, goal)"]
+    invariants:
+      - {literal: "grasped(g, cube)", regress_to: reach}
+  - name: settle
+    exit: ["arm_static(g)"]
+    invariants:
+      - {literal: "at_goal(cube, goal)", regress_to: carry}
+official:
+  - {literals: ["grasped(g, cube)"], key: is_grasped}
+  - {literals: ["at_goal(cube, goal)"], key: is_obj_placed}
+  - {literals: ["arm_static(g)"], key: is_robot_static}
+  - {literals: ["arm_static(g)", "at_goal(cube, goal)"], key: success}
+params:
+  - {name: near.max_dist, default: 0.02, range: [0.0, 0.05]}
+  - {name: progress.reach.d0, default: 0.3, range: [0.1, 0.6]}
