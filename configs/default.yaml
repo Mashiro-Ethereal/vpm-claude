@@ -1,0 +1,14 @@
+generation:
+  max_turns: 80
+  round_timeout_s: 2400
+review:
+  max_turns: 40
+  timeout_s: 900
+max_rounds: 4
+harness_retries: 2
+k: 1
+gpu: 1
+paths:
+  packages: outputs/stage1/packages
+  runs: outputs/stage1/runs
+  wrapper: /home/zxh/.local/bin/claude-deepseek

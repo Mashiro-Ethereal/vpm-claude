@@ -2,7 +2,7 @@
 
 > **用途：** 交接用。说明 `stage1-impl` 分支上的代码现状、重写时要用到的环境事实和经验，以及委托 Codex 的做法。设计结论以 [技术方案](00_technical_plan.md) 为准，本文只记实现。
 >
-> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a、M1b 已提交（adcd518、97bc833）；M2 已提交（c423943）；M3 已提交（96ad2d5），参照候选你已看过同意；TASK.md 的模板已提交（5a7691d）；M4a 已提交（第 8 节）。
+> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a、M1b 已提交（adcd518、97bc833）；M2 已提交（c423943）；M3 已提交（96ad2d5），参照候选你已看过同意；TASK.md 的模板已提交（5a7691d）；M4a 已提交（c1a3580）；M4b 已提交；PickCube 试跑等你批准（第 8 节）。
 
 ## 1. 分支与提交
 
@@ -77,7 +77,8 @@ PickCube 试跑会话按 [05](05_implementation_plan.md) 执行。任务说明�
 | M1b 静态检查 | 已提交（97bc833） | `vpmkit/candidate/`：`codes.py`、`pyinfo.py`、`report.py`、`static.py`，`load_candidate` | `tests/unit/test_static.py` 与 `tests/fixtures/mutations.py`（119 种改法）；单元测试共 96 个，全部通过 |
 | M2 ManiSkill 适配层 | 已提交（c423943） | `vpmkit/adapters/maniskill/`：`env.py`、`binding.py`、`adapter.py`、`inventory.py`、`helpers_table.py`；`errors.py` 加 `BindingError` | 单元测试共 110 个；`tests/integration/` 4 个（GPU，`VPM_INTEGRATION=1`），全部通过 |
 | M3 参照候选与第一层 | 已提交（96ad2d5） | `candidates/reference/PickCube-v1/`；`vpmkit/validate/`：`run_worker.py`、`layer1.py`、`check_sh.py`；`vpmkit/resources/check.sh.template`；`scripts/check_candidate.py` | 单元测试共 123 个；集成测试共 9 个，全部通过 |
-| M4a 输入包 | 已提交 | `vpmkit/package/`：`strip.py`、`helpers.py`、`build.py`；`scripts/build_packages.py`；模板 `vpmkit/resources/TASK_template.md`（我写） | 单元测试共 135 个；集成测试共 10 个，全部通过 |
+| M4a 输入包 | 已提交（c1a3580） | `vpmkit/package/`：`strip.py`、`helpers.py`、`build.py`；`scripts/build_packages.py`；模板 `vpmkit/resources/TASK_template.md`（我写） | 单元测试共 135 个；集成测试共 10 个，全部通过 |
+| M4b harness 与第二层 | 已提交 | `vpmkit/harness/`：`env.py`、`rundir.py`、`backends.py`、`review.py`、`run.py`；`configs/default.yaml`；`scripts/run_generation.py`；提示词 `vpmkit/resources/review_prompt.md`（我写） | 单元测试共 166 个；集成测试共 15 个（脚本后端，不调用 DeepSeek），全部通过 |
 
 M1a 的要点：
 - 世界快照 `Snapshot` 是张量的数据类：各对象的 `BodyState`（位姿、速度、尺寸、附加属性，夹爪另有开度与手臂关节速度，预留关节读数）、桌面高度、成对的抓取与接触力读数，以及 `evaluate()` 的字段（`official`）。谓词看到的是只读视图，世界视图拿不到 `official`。快照可以拼接、切片、保存与读取（`torch.save`，读取时 `weights_only=True`）。
@@ -114,3 +115,10 @@ M4a 的要点：
 - 包的内容：TASK.md、`env_source.py`（删去两个奖励函数，其余逐字保留，所以被删处前后会留下几行空行）、`helpers.py`、`scene_inventory.md`、`candidate_api.md`、`example/`（8 个文件）、`manifest.json`（各文件的来源与 sha256，`package_sha256` 由各文件的路径与哈希算出，不含时间）。
 - PickCube 的包：`outputs/stage1/packages/PickCube-v1/`，`package_sha256` = 611246a2c74dc8724270a93d9af91ec7df3d3fdaf6cdb05c22651da60835cd29。
 - 会被拦下的三个任务（PullCubeTool、TurnFaucet、PushT）报 `ResidualRewardError` 并列出残留的行，等扩展时再定怎么处理。
+
+M4b 的要点：
+- 启动一次生成：`scripts/run_generation.py --env PickCube-v1 --gpu <卡号> [--backend claude|scripted]`。它启动时把 `CUDA_VISIBLE_DEVICES` 设为所选的卡（agent 的 `check.sh` 与 harness 自己的第一层用同一张卡），并把 `XDG_CACHE_HOME`、`MS_ASSET_DIR`、`TMPDIR` 指到 `outputs/`；DeepSeek 子进程的环境由代码构造，只有 HOME、PATH、LANG、LANGUAGE、LC_ALL、三个代理变量与 `CUDA_VISIBLE_DEVICES`。所以从你的终端和从我这边启动，结果相同。
+- 运行目录 `outputs/stage1/runs/<任务>/<时间>/`：`workspace/`（输入包副本只读，`candidate/` 可写，`check.sh`，`git init`）与 `records/`（`run.json`：包的哈希、取值、环境变量名单、CLI 版本、会话编号；每轮一个目录：prompt、stream-json、stderr、本轮结束时的候选、两层的报告、审查的原始输出与解析结果；`verdict.json`：结论、用了几轮、每轮的第一层错误代码与审查错误类别、agent 运行 `check.sh` 的次数）。
+- 判定：生成会话正常结束、用完 `--max-turns`、到了时间上限，这一轮都照常进入两层检查；没有结果事件或其他出错算 harness 故障，最多重试 2 次（有会话编号时续接原会话）。审查输出解析不了也算 harness 故障。
+- 超时时结束整个进程组（先 SIGTERM，宽限 5 秒后 SIGKILL）；正常结束后也清理进程组。
+- stream-json 与 stderr 保存后，把名字像密钥的字段值（如 init 事件的 `apiKeySource`）抹成 `[REDACTED]`，token 用量的计数保留。
