@@ -2,7 +2,7 @@
 
 > **用途：** 说明怎样把 [00 技术方案](00_technical_plan.md) 实现出来：分几步，每步交给 Codex 做什么，我怎么验收，什么时候停下来问你。做什么以 00 为准，本文只管怎么执行。
 >
-> **状态（2026-10-21）：** 已确认。第 10 节的三处实现细节你全部同意，已写进 00（第 2.1、2.4、3.2–3.4、7.1、7.2、7.5、8.2 节与附录 A）。同日你又定：先在 PickCube 一个任务上走通全流程（包括生成），再扩展到其余 15 个；示例改用虚构的典型抓放任务（00 第 6.4、10.3 节）。第 1–9 节已随之改写。“准备”一步已做完（第 4.1 节），你已看过并同意。2026-10-26 起由 PickCube 试跑会话执行：M1a 已提交（adcd518，第 4.2 节），M1b 已提交（97bc833，第 4.3 节）；M2 已提交（c423943，第 5 节）；M3 已提交（第 6 节）；参照候选你已看过同意（01 §4.14）。M4a 进行中。
+> **状态（2026-10-21）：** 已确认。第 10 节的三处实现细节你全部同意，已写进 00（第 2.1、2.4、3.2–3.4、7.1、7.2、7.5、8.2 节与附录 A）。同日你又定：先在 PickCube 一个任务上走通全流程（包括生成），再扩展到其余 15 个；示例改用虚构的典型抓放任务（00 第 6.4、10.3 节）。第 1–9 节已随之改写。“准备”一步已做完（第 4.1 节），你已看过并同意。2026-10-26 起由 PickCube 试跑会话执行：M1a 已提交（adcd518，第 4.2 节），M1b 已提交（97bc833，第 4.3 节）；M2 已提交（c423943，第 5 节）；M3 已提交（96ad2d5，第 6 节），参照候选你已看过同意（01 §4.14）；TASK.md 的模板已提交（5a7691d）；M4a 已提交（第 7.1 节）；M4b 进行中。
 
 ## 1. 总体安排
 
@@ -137,6 +137,7 @@ tests/unit/  tests/integration/  tests/fixtures/（各类错误的候选；合�
   - PullCubeTool、TurnFaucet、PushT 被拦下（00 第 6.2 节）；
   - 同一任务生成两次，哈希相同。
 - 这三个任务怎么处理，扩展到其余任务时再定。
+- **完成情况（2026-10-26）：** TASK.md 的模板由我先写好（`vpmkit/resources/TASK_template.md`，你定保留说明之后流程的那段，01 §4.15）。Codex 一次做完，审查通过：新建 `vpmkit/package/` 下的 `strip.py`（删奖励函数、查残留）、`helpers.py`（照示例格式渲染辅助函数对照表）、`build.py`（`build_package`，在子进程中生成场景清单，先在临时目录建好再整体换上，manifest 不含时间等随运行变化的内容），以及 `scripts/build_packages.py`。我重跑：单元测试 135 个、集成测试 10 个全部通过。16 个源文件的删除结果与记录一致（PickCube 216→186、LiftPegUpright 144→111、StackCube 186→145、PegInsertionSide 360→300，StackPyramid、PlugCharger、AssemblingKits 不变；PullCubeTool、TurnFaucet、PushT 被拦下，其余 8 个通过）。PickCube 的包在 `outputs/stage1/packages/PickCube-v1/`，`package_sha256` = 611246a2…cd29；两次生成的文件与哈希完全相同。我逐个文件看过：TASK.md 填对了，`env_source.py` 186 行、不含 “reward”，`example/` 与 `candidate_api.md` 与仓库中的原件逐字节相同，场景清单与 M2 生成的相同。任务说明见 [briefs/m4a.md](briefs/m4a.md)。
 
 ### 7.2 M4b harness 与第二层
 
