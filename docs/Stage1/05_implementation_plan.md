@@ -171,7 +171,8 @@ tests/unit/  tests/integration/  tests/fixtures/（各类错误的候选；合�
 ## 8.1 PPO 接入检查（2026-10-26 加，01 §4.20）
 
 - 你定试跑之后先确认生成的 teacher 能接入 RL 训练，再定是否扩展。Codex 写 `scripts/ppo_check.py`（照官方 `ppo.py` 改写，只建一个 GPU 环境，PBRS 包装，默认只对截断自举，训练后在同一环境上做确定性评估并核对成功时 teacher 的阶段，可选 wandb）与判断自举的小函数 `vpmkit/ppo_bootstrap.py`；我审查后由我启动训练，跑之前问你。
-- 第一次（γ = 0.8，1000 万步）：接入正常，teacher 没有学会，稠密奖励学会。结果与分析见 [07](07_ppo_check.md)。下一步的检验见 07 第 5 节。
+- 第一次（γ = 0.8，1000 万步）：接入正常，teacher 没有学会，稠密奖励学会。第二次（γ = 0.99，teacher、稠密、稀疏各一次）：teacher 仍没有学会。第三次（你定：成功奖励 10；再加 Φ 不除以 K；SAC）：两次 PPO 仍没有学会，SAC 在跑。结果与分析见 [07](07_ppo_check.md) 第 2、5、8 节。
+- 2026-10-26 起，PickCube 上 teacher 作奖励的效果转到新会话验证与调整，交接说明见 [04](04_handoff_prompt.md)。
 
 ## 9. 扩展到其余 15 个任务（PickCube 走通之后）
 

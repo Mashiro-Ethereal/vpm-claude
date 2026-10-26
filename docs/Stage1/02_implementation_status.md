@@ -2,7 +2,7 @@
 
 > **用途：** 交接用。说明 `stage1-impl` 分支上的代码现状、重写时要用到的环境事实和经验，以及委托 Codex 的做法。设计结论以 [技术方案](00_technical_plan.md) 为准，本文只记实现。
 >
-> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a、M1b 已提交（adcd518、97bc833）；M2 已提交（c423943）；M3 已提交（96ad2d5），参照候选你已看过同意；TASK.md 的模板已提交（5a7691d）；M4a 已提交（c1a3580）；M4b 已提交（077ac58）；PickCube 试跑已走通，见 [06](06_pickcube_trial.md)；M5 已提交；PickCube 试跑的 M1–M5 全部完成（第 8 节）。
+> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a、M1b 已提交（adcd518、97bc833）；M2 已提交（c423943）；M3 已提交（96ad2d5），参照候选你已看过同意；TASK.md 的模板已提交（5a7691d）；M4a 已提交（c1a3580）；M4b 已提交（077ac58）；PickCube 试跑已走通，见 [06](06_pickcube_trial.md)；M5 已提交；PickCube 试跑的 M1–M5 全部完成（第 8 节）。PPO 接入检查已提交（a2be90f），第三轮检验的代码已提交（58117bd），结果见 [07](07_ppo_check.md)。PickCube 上 teacher 作奖励的效果，转到新会话验证与调整（[04](04_handoff_prompt.md)）。
 
 ## 1. 分支与提交
 
@@ -41,6 +41,8 @@
 7. **审查 M3a 时改过的一处：** 第一层的子进程原来写死用 0 号卡，改为沿用调用方的 `CUDA_VISIBLE_DEVICES`。
 8. **导入顺序（2026-10-26）：** 直接 `from mani_skill.utils.geometry import rotation_conversions` 会因循环导入报错；先 `import mani_skill.envs` 就没有问题。导入不建场景、不写 `~/.maniskill`。
 9. **隐藏物体的位姿（2026-10-26，读源码）：** GPU 仿真中，`_hidden_objects`（如 PickCube 的 goal_site）在渲染时被挪到很远处；`Actor.pose` 会返回真实位姿，所以适配层一律经 `Actor.pose` 读，不直接读 physx 的缓冲区。
+10. **0 号卡上的 4 MiB 图形上下文（2026-10-26）：** 用 GPU 仿真的进程，即使 `CUDA_VISIBLE_DEVICES` 指了别的卡，SAPIEN 初始化 Vulkan 渲染器时也会在 0 号卡上建一个约 4 MiB 的图形上下文（nvidia-smi 中类型为 G）。这不是残留进程，也不占算力。0 号卡上另有别的用户的任务，不要用。
+11. **长时间的训练（2026-10-26）：** 用 `setsid nohup` 脱离会话启动，日志写在输出目录旁的 `.log`，会话结束后训练照常进行。
 
 ## 5. 任务说明
 
@@ -66,6 +68,8 @@
 
   跑 ManiSkill 或用 GPU 的任务，加 `--sandbox danger-full-access`，派发前工作区要干净。
 - 任务说明里写明：指定使用的显卡；不装包；不联网（需要调用 DeepSeek 的除外）；不改 ManiSkill 和 conda 环境；不写项目以外的位置。
+- 读训练记录、分析原因的活也交给 Codex，用只读模式（`--read-only`，你定，2026-10-26）：我写问题，核对关键数字。例子：`outputs/stage1/codex/ppo_analysis/brief.md`。
+- Codex 的只读沙箱看不到主机进程和 GPU。查进程、看卡，用几条只读的 `ps`、`nvidia-smi` 命令自己查（你定）。
 
 ## 8. 重写的进展（2026-10-26 起）
 
@@ -79,7 +83,9 @@ PickCube 试跑会话按 [05](05_implementation_plan.md) 执行。任务说明�
 | M3 参照候选与第一层 | 已提交（96ad2d5） | `candidates/reference/PickCube-v1/`；`vpmkit/validate/`：`run_worker.py`、`layer1.py`、`check_sh.py`；`vpmkit/resources/check.sh.template`；`scripts/check_candidate.py` | 单元测试共 123 个；集成测试共 9 个，全部通过 |
 | M4a 输入包 | 已提交（c1a3580） | `vpmkit/package/`：`strip.py`、`helpers.py`、`build.py`；`scripts/build_packages.py`；模板 `vpmkit/resources/TASK_template.md`（我写） | 单元测试共 135 个；集成测试共 10 个，全部通过 |
 | M4b harness 与第二层 | 已提交（077ac58） | `vpmkit/harness/`：`env.py`、`rundir.py`、`backends.py`、`review.py`、`run.py`；`configs/default.yaml`；`scripts/run_generation.py`；提示词 `vpmkit/resources/review_prompt.md`（我写） | 单元测试共 166 个；集成测试共 15 个（脚本后端，不调用 DeepSeek），全部通过 |
-| M5 PBRS 奖励包装 | 已提交 | `vpmkit/rewards/pbrs.py`；`Teacher.step` 加 `env_mask`；`configs/default.yaml` 加 `pbrs`；`scripts/pbrs_smoke.py` | 单元测试共 171 个；集成测试共 16 个，全部通过 |
+| M5 PBRS 奖励包装 | 已提交（ec70e54） | `vpmkit/rewards/pbrs.py`；`Teacher.step` 加 `env_mask`；`configs/default.yaml` 加 `pbrs`；`scripts/pbrs_smoke.py` | 单元测试共 171 个；集成测试共 16 个，全部通过 |
+| PPO 接入检查 | 已提交（a2be90f） | `scripts/ppo_check.py`；`vpmkit/ppo_bootstrap.py` | 单元测试共 174 个，全部通过 |
+| 第三轮检验 | 已提交（58117bd） | `vpmkit/rewards/pbrs.py` 加 `phi_scale`；`scripts/ppo_check.py` 加 `--phi-unnormalized`；`scripts/sac_check.py` | 单元测试共 178 个，全部通过 |
 
 M1a 的要点：
 - 世界快照 `Snapshot` 是张量的数据类：各对象的 `BodyState`（位姿、速度、尺寸、附加属性，夹爪另有开度与手臂关节速度，预留关节读数）、桌面高度、成对的抓取与接触力读数，以及 `evaluate()` 的字段（`official`）。谓词看到的是只读视图，世界视图拿不到 `official`。快照可以拼接、切片、保存与读取（`torch.save`，读取时 `weights_only=True`）。
@@ -133,4 +139,10 @@ M5 的要点：
 - 开销：N = 1024 时仿真每步约 40.9 ms，读快照加 Teacher 每步约 5.0 ms。
 - Stage2 要改的：ManiSkill 官方 PPO 对成功终止也自举，用本包装时要改成只对截断自举（00 第 4.6 节）。
 
-PPO 接入检查（2026-10-26，05 第 8.1 节）：`scripts/ppo_check.py --reward {teacher,dense,sparse} [--candidate <dir>] [--track ...]`，照官方 `ppo.py` 改写；判断自举的函数在 `vpmkit/ppo_bootstrap.py`，单元测试 `tests/unit/test_ppo_check.py`（单元测试共 174 个）。还没有提交。第一次检查的结果见 [07](07_ppo_check.md)。
+PPO 接入检查（2026-10-26，05 第 8.1 节）：`scripts/ppo_check.py --reward {teacher,dense,sparse} [--candidate <dir>] [--track ...]`，照官方 `ppo.py` 改写；判断自举的函数在 `vpmkit/ppo_bootstrap.py`，单元测试 `tests/unit/test_ppo_check.py`（单元测试共 174 个）。已提交（a2be90f）。结果见 [07](07_ppo_check.md)。
+
+第三轮检验的代码（2026-10-26，已提交 58117bd）：
+- `PBRSWrapper` 加 `phi_scale`（默认 1）：塑形用的 Φ 乘以它，成功终止时仍取 0；`info["pbrs"]["phi_teacher"]` 记没放大的 Φ。
+- `scripts/ppo_check.py` 加 `--phi-unnormalized`：phi_scale 取阶段数，Φ 的范围变为 [0, K]。
+- `scripts/sac_check.py`：照官方 `sac.py` 改写。用法：`scripts/sac_check.py --reward {teacher,dense,sparse} [--candidate <dir>] [--phi-unnormalized] [--track ...]`。PickCube 的默认值照官方 README；只建一个 GPU 环境；默认只对截断自举（`--bootstrap-at-done truncated`）；训练后在同一环境上评估 256 个回合。与官方的差别见 07 第 8 节。
+- 单元测试共 178 个（新加 `tests/unit/test_sac_check.py`）。结果见 07 第 8 节。
