@@ -132,3 +132,5 @@ M5 的要点：
 - 部分重置（`options["env_idx"]`）时，Teacher 只重置并更新被重置的环境，它们的 Φ(s) 换成新回合初始状态的值。
 - 开销：N = 1024 时仿真每步约 40.9 ms，读快照加 Teacher 每步约 5.0 ms。
 - Stage2 要改的：ManiSkill 官方 PPO 对成功终止也自举，用本包装时要改成只对截断自举（00 第 4.6 节）。
+
+PPO 接入检查（2026-10-26，05 第 8.1 节）：`scripts/ppo_check.py --reward {teacher,dense,sparse} [--candidate <dir>] [--track ...]`，照官方 `ppo.py` 改写；判断自举的函数在 `vpmkit/ppo_bootstrap.py`，单元测试 `tests/unit/test_ppo_check.py`（单元测试共 174 个）。还没有提交。第一次检查的结果见 [07](07_ppo_check.md)。

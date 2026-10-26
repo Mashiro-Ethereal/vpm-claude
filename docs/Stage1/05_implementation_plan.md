@@ -168,6 +168,11 @@ tests/unit/  tests/integration/  tests/fixtures/（各类错误的候选；合�
 - **顺带测一次开销：** N 取 1024 或 2048 时，比较 teacher 每步的耗时与仿真每步的耗时，用来检验 00 第 12 节的【假设】。
 - **完成情况（2026-10-26）：** r_bonus 你定为 1（01 §4.19）。Codex 一次做完，审查通过：`vpmkit/rewards/pbrs.py`（`PBRSWrapper`）、`Teacher.step` 加 `env_mask`（部分重置时只更新被重置的环境）、`configs/default.yaml` 加 `pbrs` 一节（γ = 0.8、r_bonus = 1）、`scripts/pbrs_smoke.py`。我重跑：单元测试 171 个、集成测试 16 个全部通过。冒烟测试（PickCube，16 个并行环境，随机动作 120 步，每个环境自动重置 2 次）：奖励是 float32 [16]、有限；每步奖励等于 γΦ(s′) − Φ(s) + 成功 × r_bonus；截断那一步的 Φ(s′) 算在回合结束时的状态上（记下的 `elapsed_steps` 都是 50）；重置后下一步的 Φ(s) 等于新回合初始状态的值；Teacher 的调用次数等于每步一次加每次部分重置一次；每个回合的折扣塑形总和逐项相消，最大误差 1.7e-8。随机动作没有成功过，成功终止的情形由单元测试覆盖。开销：N = 1024 时仿真每步约 40.9 ms，读快照加 Teacher 每步约 5.0 ms。另发现 ManiSkill 官方 PPO 对成功终止也自举，Stage2 要改（已记进 00 第 4.6 节）。任务说明见 [briefs/m5.md](briefs/m5.md)。
 
+## 8.1 PPO 接入检查（2026-10-26 加，01 §4.20）
+
+- 你定试跑之后先确认生成的 teacher 能接入 RL 训练，再定是否扩展。Codex 写 `scripts/ppo_check.py`（照官方 `ppo.py` 改写，只建一个 GPU 环境，PBRS 包装，默认只对截断自举，训练后在同一环境上做确定性评估并核对成功时 teacher 的阶段，可选 wandb）与判断自举的小函数 `vpmkit/ppo_bootstrap.py`；我审查后由我启动训练，跑之前问你。
+- 第一次（γ = 0.8，1000 万步）：接入正常，teacher 没有学会，稠密奖励学会。结果与分析见 [07](07_ppo_check.md)。下一步的检验见 07 第 5 节。
+
 ## 9. 扩展到其余 15 个任务（PickCube 走通之后）
 
 - 前提：你看过 PickCube 试跑的结果，同意扩展。
