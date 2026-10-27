@@ -1,8 +1,8 @@
-# Stage1 实现现状（2026-10-26）
+# Stage1 实现现状（2026-10-27）
 
 > **用途：** 交接用。说明 `stage1-impl` 分支上的代码现状、重写时要用到的环境事实和经验，以及委托 Codex 的做法。设计结论以 [技术方案](00_technical_plan.md) 为准，本文只记实现。
 >
-> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a、M1b 已提交（adcd518、97bc833）；M2 已提交（c423943）；M3 已提交（96ad2d5），参照候选你已看过同意；TASK.md 的模板已提交（5a7691d）；M4a 已提交（c1a3580）；M4b 已提交（077ac58）；PickCube 试跑已走通，见 [06](06_pickcube_trial.md)；M5 已提交；PickCube 试跑的 M1–M5 全部完成（第 8 节）。PPO 接入检查已提交（a2be90f），第三轮检验的代码已提交（58117bd），结果见 [07](07_ppo_check.md)。PickCube 上 teacher 作奖励的效果，转到新会话验证与调整（[04](04_handoff_prompt.md)）。
+> **现状：** 2026-10-21，议程全部定完（G1 推迟），[技术方案](00_technical_plan.md) 定为执行标准。此前写的全部 Stage1 实现代码已删除，理由（你的意见）：那些代码写在逐点讨论之前，基本都要大改，不如重写。重写按 00 第 10.3 节的实现阶段 M1–M5 进行，分步与验收见 [05](05_implementation_plan.md)（2026-10-21 确认）。M1 之前的“准备”已做完：2026-10-21 写好 `vpmkit/resources/candidate_api.md` 与 `vpmkit/resources/example/`（规格，不是代码），你已看过并同意，已提交（df892b1）。2026-10-26 起 PickCube 试跑会话按 05 执行：M1a、M1b 已提交（adcd518、97bc833）；M2 已提交（c423943）；M3 已提交（96ad2d5），参照候选你已看过同意；TASK.md 的模板已提交（5a7691d）；M4a 已提交（c1a3580）；M4b 已提交（077ac58）；PickCube 试跑已走通，见 [06](06_pickcube_trial.md)；M5 已提交；PickCube 试跑的 M1–M5 全部完成（第 8 节）。PPO 接入检查已提交（a2be90f），第三轮检验的代码已提交（58117bd），结果见 [07](07_ppo_check.md)。PickCube 上 teacher 作奖励的效果，转到新会话验证与调整（[04](04_handoff_prompt.md)）。2026-10-27 检验了 teacher 在成功轨迹上的表现（`scripts/teacher_check.py`），结果见 [08](08_teacher_check.md)；同一天写了两份交接说明：[09](09_code_reading_handoff.md) 带你读代码，[10](10_codex_tuning_handoff.md) 把调参交给 Codex 单独做。
 
 ## 1. 分支与提交
 
@@ -43,6 +43,11 @@
 9. **隐藏物体的位姿（2026-10-26，读源码）：** GPU 仿真中，`_hidden_objects`（如 PickCube 的 goal_site）在渲染时被挪到很远处；`Actor.pose` 会返回真实位姿，所以适配层一律经 `Actor.pose` 读，不直接读 physx 的缓冲区。
 10. **0 号卡上的 4 MiB 图形上下文（2026-10-26）：** 用 GPU 仿真的进程，即使 `CUDA_VISIBLE_DEVICES` 指了别的卡，SAPIEN 初始化 Vulkan 渲染器时也会在 0 号卡上建一个约 4 MiB 的图形上下文（nvidia-smi 中类型为 G）。这不是残留进程，也不占算力。0 号卡上另有别的用户的任务，不要用。
 11. **长时间的训练（2026-10-26）：** 用 `setsid nohup` 脱离会话启动，日志写在输出目录旁的 `.log`，会话结束后训练照常进行。
+12. **重置后的抓取读数是旧的（2026-10-27）：**
+    - GPU 仿真中，重置后第一个状态上的 `is_grasping` 可能沿用重置前的接触。这个读数也出现在 PickCube 观测里的 is_grasped，以及 teacher 第 0 步的 grasped。
+    - 同一进程里，此前的回合抓着方块时，重置后约三分之二的环境在爪子远离方块时也报抓住；新进程的第一次重置没有这种情况。推测是重置只设位姿、不跑物理步，接触冲量还是上一步的。
+    - 第 1 步起读数正常。
+    - 因为第一个观测不同，训练后在同一进程里做的评估，换一个进程不能逐步复现（08 第 2、3 节）。
 
 ## 5. 任务说明
 
@@ -86,6 +91,7 @@ PickCube 试跑会话按 [05](05_implementation_plan.md) 执行。任务说明�
 | M5 PBRS 奖励包装 | 已提交（ec70e54） | `vpmkit/rewards/pbrs.py`；`Teacher.step` 加 `env_mask`；`configs/default.yaml` 加 `pbrs`；`scripts/pbrs_smoke.py` | 单元测试共 171 个；集成测试共 16 个，全部通过 |
 | PPO 接入检查 | 已提交（a2be90f） | `scripts/ppo_check.py`；`vpmkit/ppo_bootstrap.py` | 单元测试共 174 个，全部通过 |
 | 第三轮检验 | 已提交（58117bd） | `vpmkit/rewards/pbrs.py` 加 `phi_scale`；`scripts/ppo_check.py` 加 `--phi-unnormalized`；`scripts/sac_check.py` | 单元测试共 178 个，全部通过 |
+| teacher 在成功轨迹上的检验 | 已提交（2026-10-27） | `scripts/teacher_check.py` | 单元测试共 190 个，全部通过 |
 
 M1a 的要点：
 - 世界快照 `Snapshot` 是张量的数据类：各对象的 `BodyState`（位姿、速度、尺寸、附加属性，夹爪另有开度与手臂关节速度，预留关节读数）、桌面高度、成对的抓取与接触力读数，以及 `evaluate()` 的字段（`official`）。谓词看到的是只读视图，世界视图拿不到 `official`。快照可以拼接、切片、保存与读取（`torch.save`，读取时 `weights_only=True`）。
@@ -146,3 +152,14 @@ PPO 接入检查（2026-10-26，05 第 8.1 节）：`scripts/ppo_check.py --rewa
 - `scripts/ppo_check.py` 加 `--phi-unnormalized`：phi_scale 取阶段数，Φ 的范围变为 [0, K]。
 - `scripts/sac_check.py`：照官方 `sac.py` 改写。用法：`scripts/sac_check.py --reward {teacher,dense,sparse} [--candidate <dir>] [--phi-unnormalized] [--track ...]`。PickCube 的默认值照官方 README；只建一个 GPU 环境；默认只对截断自举（`--bootstrap-at-done truncated`）；训练后在同一环境上评估 256 个回合。与官方的差别见 07 第 8 节。
 - 单元测试共 178 个（新加 `tests/unit/test_sac_check.py`）。结果见 07 第 8 节。
+
+teacher 在成功轨迹上的检验（2026-10-27，已提交）：
+- **用法：** `scripts/teacher_check.py [--policy <final_model.pt>] [--seeds ...] [--stochastic-seed ...] [--out ...]`。
+- **做什么：**
+  - 加载 `ppo_check.py` 训出的策略，默认是第一轮稠密奖励那次。
+  - 建一个 GPU 环境，按带种子的重置跑回合，确定性与随机各一组，每个环境只看第一个回合。
+  - 生成的 teacher 与参照候选作为只记录的观察层，挂在 PBRS 包装的位置，奖励与动作不变。
+  - 统计链覆盖率、回退、各段的时间与进入时的距离、Φ 的走势、官方对应、两个候选的差别。
+- **输出：** `config.json`、`trajectories.pt`、`summary.json`、`report.md`。
+- **限制：** 候选与策略的默认路径写在脚本里，统计中用到 grasp、carry 两个阶段名，只适用于 PickCube。
+- 单元测试共 190 个（新加 `tests/unit/test_teacher_check.py`）。结果见 [08](08_teacher_check.md)。
